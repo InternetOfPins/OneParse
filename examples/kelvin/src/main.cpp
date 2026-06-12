@@ -57,10 +57,14 @@ using SignedIntP = ParseDef<int,
 constexpr const char kPrefix[] = "temp: ";
 
 // skip prefix, then (signed int + 'K')  →  Kelvin node
-using KelvinP = ParseDef<Kelvin,
+using RawKelvinP = ParseDef<Kelvin,
     Str<kPrefix>,
     To<Pair<int,char>, makeKelvin,
         Seq<SignedIntP, ParseDef<char, Char<'K'>>>>>;
+
+// reject below absolute zero inline — mirrors paco's .verify(o => o.temp >= 0)
+constexpr bool isPositiveKelvin(Kelvin k) { return k.temp >= 0; }
+using KelvinP = ParseDef<Kelvin, Verify<RawKelvinP, isPositiveKelvin>>;
 
 // --- Runner -------------------------------------------------------------------
 
@@ -71,11 +75,6 @@ static void run(const char* input) {
 
   if (!r.ok) {
     cout << "    -> error: parse failed at \"" << (r.rest ? r.rest : "") << "\"" << endl;
-    return;
-  }
-  if (r.val.temp < 0) {
-    cout << "    -> error: positive Kelvin only! "
-         << r.val.temp << " K is below absolute zero" << endl;
     return;
   }
   cout << "    -> Kelvin{ temp: " << r.val.temp
