@@ -37,6 +37,9 @@ All meta-parsers are components and compose inside `ParserDef` chains. Internall
 `Many<P>` takes a **single component** — use `Many<Or<P1,P2>>` to match alternatives.  
 `Skip<PP...>` takes a **variadic component chain** — `Chain` is built internally.  
 `To<T_in, F, PP...>` takes an explicit input type, a transform, and a **variadic component chain**.  
+`ManyTill<P,End>` takes two **single components**.  
+`Between<Open,P,Close>` takes single components `Open`/`Close` and a **complete parser** `P`.  
+`SepBy<P,Sep,N>` / `SepBy1<P,Sep,N>` / `Verify<P,F>` take **complete parsers**.  
 `Seq<P1,P2>`, `ManyFn<P,F>`, and `ManyN<P,N>` take **complete parsers** (`ParserDef<T,...>`) so their result types are statically known.
 
 | Component | Description |
@@ -50,6 +53,13 @@ All meta-parsers are components and compose inside `ParserDef` chains. Internall
 | `Seq<P1,P2>` | run complete parsers `P1` then `P2`, yield `Pair<P1::Type, P2::Type>` |
 | `ManyFn<P,F>` | call `F(val)` on each match of complete parser `P` — visitor, zero alloc |
 | `ManyN<P,N>` | collect up to `N` matches of complete parser `P` into `Arr<T,N>` |
+| `Any` | match any single non-null character |
+| `Eof` | succeed only at end of input |
+| `ManyTill<P,End>` | advance past `P` zero or more times, stopping when `End` matches; fails if `End` never found |
+| `Between<Open,P,Close>` | skip component `Open`, run complete parser `P`, skip component `Close`; yield `P`'s result |
+| `SepBy<P,Sep,N>` | parse complete parser `P` zero or more times, separated by component `Sep`; up to `N` items |
+| `SepBy1<P,Sep,N>` | same as `SepBy` but requires at least one item |
+| `Verify<P,F>` | run complete parser `P`; fail without consuming if `F(val)` returns false |
 
 Utility types: `Pair<A,B>` (`fst`, `snd`) and `Arr<T,N>` (`data`, `len`, iterator pair).
 

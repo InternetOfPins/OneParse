@@ -396,6 +396,161 @@ namespace oneParse {
     };
   };
 
+  // Match any single non-null character
+  struct Any {
+    template<typename O>
+    struct Part : O {
+      using Base = O;
+      using Base::Base;
+      static auto run(Src src) -> typename Base::Result {
+        if (src && *src) {
+          auto r = Base::run(src + 1);
+          if (r.ok) r.val = *src;
+          return r;
+        }
+        return {false, {}, src};
+      }
+    };
+  };
+
+  // Succeed only at end of input
+  struct Eof {
+    template<typename O>
+    struct Part : O {
+      using Base = O;
+      using Base::Base;
+      static auto run(Src src) -> typename Base::Result {
+        if (!src || !*src) return Base::run(src);
+        return {false, {}, src};
+      }
+    };
+  };
+
+  // Advance past component P zero or more times, stopping when End matches
+  // End is checked before P on each step; does not consume End
+  // Fails if End never matches before the input is exhausted
+  template<typename P, typename End>
+  struct ManyTill {
+    template<typename O>
+    struct Part : O {
+      using Base = O;
+      using Base::Base;
+      static auto run(Src src) -> typename Base::Result {
+        Src cur = src;
+        while (true) {
+          if (Chain<End>::template Part<ParseAPI<char>>::run(cur).ok) break;
+          if (!cur || !*cur) return {false, {}, src};
+          auto probe = Chain<P>::template Part<ParseAPI<char>>::run(cur);
+          if (!probe.ok) return {false, {}, src};
+          cur = probe.rest;
+        }
+        return Base::run(cur);
+      }
+    };
+  };
+
+  // Skip Open component, run complete parser P, skip Close component; yield P's result
+  template<typename Open, typename P, typename Close>
+  struct Between {
+    template<typename O>
+    struct Part : O {
+      using Base = O;
+      using Base::Base;
+      static auto run(Src src) -> typename Base::Result {
+        Src orig = src;
+        auto open = Chain<Open>::template Part<ParseAPI<char>>::run(src);
+        if (!open.ok) return {false, {}, orig};
+        auto inner = P::run(open.rest);
+        if (!inner.ok) return {false, {}, orig};
+        auto close = Chain<Close>::template Part<ParseAPI<char>>::run(inner.rest);
+        if (!close.ok) return {false, {}, orig};
+        auto r = Base::run(close.rest);
+        if (r.ok) r.val = inner.val;
+        return r;
+      }
+    };
+  };
+
+  // Parse complete parser P separated by component Sep; collect up to N items; zero or more
+  // Backtracks if item fails after a matched separator, stops collecting (does not fail)
+  template<typename P, typename Sep, size_t N>
+  struct SepBy {
+    using ElemT = typename P::Type;
+    template<typename O>
+    struct Part : O {
+      using Base = O;
+      using Base::Base;
+      static auto run(Src src) -> typename Base::Result {
+        Arr<ElemT, N> arr{};
+        auto first = P::run(src);
+        if (!first.ok) {
+          auto r = Base::run(src);
+          if (r.ok) r.val = arr;
+          return r;
+        }
+        if (!arr.push(first.val)) return {false, {}, src};
+        src = first.rest;
+        while (src) {
+          auto sep = Chain<Sep>::template Part<ParseAPI<char>>::run(src);
+          if (!sep.ok) break;
+          auto item = P::run(sep.rest);
+          if (!item.ok) break;
+          if (!arr.push(item.val)) return {false, {}, src};
+          src = item.rest;
+        }
+        auto r = Base::run(src);
+        if (r.ok) r.val = arr;
+        return r;
+      }
+    };
+  };
+
+  // Same as SepBy but fails if zero items are parsed
+  template<typename P, typename Sep, size_t N>
+  struct SepBy1 {
+    using ElemT = typename P::Type;
+    template<typename O>
+    struct Part : O {
+      using Base = O;
+      using Base::Base;
+      static auto run(Src src) -> typename Base::Result {
+        Arr<ElemT, N> arr{};
+        auto first = P::run(src);
+        if (!first.ok) return {false, {}, src};
+        if (!arr.push(first.val)) return {false, {}, src};
+        src = first.rest;
+        while (src) {
+          auto sep = Chain<Sep>::template Part<ParseAPI<char>>::run(src);
+          if (!sep.ok) break;
+          auto item = P::run(sep.rest);
+          if (!item.ok) break;
+          if (!arr.push(item.val)) return {false, {}, src};
+          src = item.rest;
+        }
+        auto r = Base::run(src);
+        if (r.ok) r.val = arr;
+        return r;
+      }
+    };
+  };
+
+  // Run complete parser P; if F(val) returns false, fail without consuming input
+  template<typename P, auto F>
+  struct Verify {
+    template<typename O>
+    struct Part : O {
+      using Base = O;
+      using Base::Base;
+      static auto run(Src src) -> typename Base::Result {
+        auto probe = P::run(src);
+        if (!probe.ok || !F(probe.val)) return {false, {}, src};
+        auto r = Base::run(probe.rest);
+        if (r.ok) r.val = probe.val;
+        return r;
+      }
+    };
+  };
+
   // --- Sugar ------------------------------------------------------------------
 
   constexpr bool isDigit(char c) { return c >= '0' && c <= '9'; }
