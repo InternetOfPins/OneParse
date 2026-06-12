@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace Quick {
 
   template<typename T,T l,T h>
@@ -18,8 +20,9 @@ namespace Quick {
 
 };
 
-template<uint32_t f,uint32_t l> using Range=Quick::Range<uint32_t,f,l>;
-template<typename... OO> using Ranges=Quick::Ranges<OO...>;
+namespace wcw {
+  template<uint32_t f,uint32_t l> using Range=Quick::Range<uint32_t,f,l>;
+  template<typename... OO> using Ranges=Quick::Ranges<OO...>;
 
 using WCWidthCJK=Ranges<
     Range<0x00A1, 0x00A1>, Range<0x00A4, 0x00A4>, Range<0x00A7, 0x00A8>,
@@ -75,3 +78,4 @@ using WCWidthCJK=Ranges<
     Range<0x273D, 0x273D>, Range<0x2776, 0x277F>, Range<0xE000, 0xF8FF>,
     Range<0xFFFD, 0xFFFD>, Range<0xF0000, 0xFFFFD>, Range<0x100000, 0x10FFFD>
   >;
+} // namespace wcw
