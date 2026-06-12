@@ -39,7 +39,7 @@ All meta-parsers are components and compose inside `ParserDef` chains. Internall
 `To<T_in, F, PP...>` takes an explicit input type, a transform, and a **variadic component chain**.  
 `ManyTill<P,End>` takes two **single components**.  
 `Between<Open,P,Close>` takes single components `Open`/`Close` and a **complete parser** `P`.  
-`SepBy<P,Sep,N>` / `SepBy1<P,Sep,N>` / `Verify<P,F>` take **complete parsers**.  
+`SepBy<P,Sep,N>` / `SepBy1<P,Sep,N>` / `Verify<P,F>` / `Defer<T,F>` take **complete parsers**.  
 `Seq<P1,P2>`, `ManyFn<P,F>`, and `ManyN<P,N>` take **complete parsers** (`ParserDef<T,...>`) so their result types are statically known.
 
 | Component | Description |
@@ -60,6 +60,7 @@ All meta-parsers are components and compose inside `ParserDef` chains. Internall
 | `SepBy<P,Sep,N>` | parse complete parser `P` zero or more times, separated by component `Sep`; up to `N` items |
 | `SepBy1<P,Sep,N>` | same as `SepBy` but requires at least one item |
 | `Verify<P,F>` | run complete parser `P`; fail without consuming if `F(val)` returns false |
+| `Defer<T,F>` | call `F(src) → Res<T>` at runtime — breaks template recursion for self-referential grammars |
 
 Utility types: `Pair<A,B>` (`fst`, `snd`) and `Arr<T,N>` (`data`, `len`, iterator pair).
 

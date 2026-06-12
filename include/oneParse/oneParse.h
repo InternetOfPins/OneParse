@@ -396,6 +396,24 @@ namespace oneParse {
     };
   };
 
+  // Call F(src) at runtime, breaking template recursion for self-referential parsers
+  // F must be declared before this template is instantiated (forward declaration is enough)
+  template<typename T, auto F>
+  struct Defer {
+    template<typename O>
+    struct Part : O {
+      using Base = O;
+      using Base::Base;
+      static auto run(Src src) -> typename Base::Result {
+        auto probe = F(src);
+        if (!probe.ok) return {false, {}, src};
+        auto r = Base::run(probe.rest);
+        if (r.ok) r.val = probe.val;
+        return r;
+      }
+    };
+  };
+
   // Match any single non-null character
   struct Any {
     template<typename O>
