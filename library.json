@@ -1,0 +1,27 @@
+{
+  "name": "OneParse",
+  "version": "0.0.1",
+  "description": "HAPI parser combinator components",
+  "keywords": "components, parser, combinators",
+  "repository":
+  {
+    "type": "git",
+    "url": "https://github.com/InternetOfPins/OneParse.git"
+  },
+  "authors":
+  [
+    {
+      "name": "Rui Azevedo",
+      "email": "ruihfazevedo@gmail.com",
+      "url": "https://github.com/neu-rah",
+      "maintainer": true
+    }
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/InternetOfPins/OneParse",
+  "dependencies": {
+    "HAPI": "*"
+  },
+  "frameworks": "*",
+  "platforms": "*"
+}
