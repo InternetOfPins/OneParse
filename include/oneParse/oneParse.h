@@ -282,8 +282,11 @@ namespace oneParse {
   };
 
   // Try component P1; on failure try component P2; both share the chain's T
+  // Inherits ZeroWidthTag if either branch is zero-width — propagates recursively
   template<typename P1, typename P2>
-  struct Or {
+  struct Or : std::conditional_t<
+      std::is_base_of_v<ZeroWidthTag,P1> || std::is_base_of_v<ZeroWidthTag,P2>,
+      ZeroWidthTag, hapi::Nil> {
     template<typename O>
     struct Part : O {
       using Base = O;
