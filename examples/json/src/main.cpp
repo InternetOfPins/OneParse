@@ -1,12 +1,16 @@
 // OneParse json example — flat JSON object parser
 //
 // Inspired by paco json-paco-ast (github.com/neu-rah/paco):
+//   _null  = string("null").as(_ => null)
+//   _true  = string("true").as(_ => true)
+//   _false = string("false").as(_ => false)
 //   string = skip('"') + many(noneOf('"')) + skip('"')
+//   number = optional('-') + int + optional(frac)
 //   member = string + skip(':') + value
 //   object = skip('{') + sepBy(member, ',') + skip('}')
 //
-// Parses flat JSON objects with string or integer values.
-// Demonstrates: Between, SepBy, Not, Or, To, Verify
+// Parses flat JSON objects: null, bool, int, string values.
+// Demonstrates: Between, SepBy, Not, Or, To, Str (keyword matching)
 
 #ifdef ARDUINO
   #include <Arduino.h>
@@ -21,9 +25,10 @@ using namespace oneParse;
 // --- Value type ---------------------------------------------------------------
 
 struct Val {
-  enum class Kind : uint8_t { None, Str, Int } kind = Kind::None;
+  enum class Kind : uint8_t { None, Null, Bool, Int, Str } kind = Kind::None;
   Arr<char,32> str{};
   int          i = 0;
+  bool         b = false;
 };
 
 // --- Helpers ------------------------------------------------------------------
@@ -34,79 +39,88 @@ static int digitsToInt(Arr<char,10> a) {
   return n;
 }
 
-static Val asStr(Arr<char,32> s) { return {Val::Kind::Str, s, 0}; }
+static Val asNull(char)          { Val v; v.kind = Val::Kind::Null;        return v; }
+static Val asTrue(char)          { Val v; v.kind = Val::Kind::Bool; v.b = true;  return v; }
+static Val asFalse(char)         { Val v; v.kind = Val::Kind::Bool; v.b = false; return v; }
+static Val asStr(Arr<char,32> s) { Val v; v.kind = Val::Kind::Str;  v.str = s;  return v; }
 
 static Val signedToVal(Pair<char,Arr<char,10>> p) {
-  int n = (p.fst == '-' ? -1 : 1) * digitsToInt(p.snd);
-  Val v; v.kind = Val::Kind::Int; v.i = n; return v;
+  Val v;
+  v.kind = Val::Kind::Int;
+  v.i = (p.fst == '-' ? -1 : 1) * digitsToInt(p.snd);
+  return v;
 }
 
-// --- String parsers -----------------------------------------------------------
+// --- Keyword literals (Str<S> requires constexpr const char[] at namespace scope) ---
 
-// Body of a quoted string: any char except '"', up to 32 chars
-using QuotedBodyP = ParseDef<Arr<char,32>,
-    ManyN<ParseDef<char, Not<Char<'"'>>>, 32>>;
+constexpr const char kNull[]  = "null";
+constexpr const char kTrue[]  = "true";
+constexpr const char kFalse[] = "false";
 
-// Key body: same, 16 chars
-using KeyBodyP = ParseDef<Arr<char,16>,
-    ManyN<ParseDef<char, Not<Char<'"'>>>, 16>>;
+// --- String parser ------------------------------------------------------------
 
-// Key parser: leading whitespace + quoted string
-using KeyP = ParseDef<Arr<char,16>,
+using QuotedBodyP = ParseDef<Arr<char,32>, ManyN<ParseDef<char, Not<Char<'"'>>>, 32>>;
+using KeyBodyP    = ParseDef<Arr<char,16>, ManyN<ParseDef<char, Not<Char<'"'>>>, 16>>;
+using KeyP        = ParseDef<Arr<char,16>,
     Skip<Many<Space>>,
     Between<Char<'"'>, KeyBodyP, Char<'"'>>>;
 
-// --- Value parsers ------------------------------------------------------------
+// --- Value components (each lifts its result to Val) --------------------------
 
-// Digits for int parsing
-using MagP = ParseDef<Arr<char,10>, SomeN<ParseDef<char,Digit>,10>>;
-using SignP = ParseDef<char, Opt<Or<Char<'+'>, Char<'-'>>>>;
+// Keywords — Str<S> matches the literal, To maps the dummy char result to Val
+using NullComp  = To<char, asNull,  Str<kNull>>;
+using TrueComp  = To<char, asTrue,  Str<kTrue>>;
+using FalseComp = To<char, asFalse, Str<kFalse>>;
 
-// Component: match a quoted string and lift to Val
-// To<T_in, F, PP...> probes PP... as T_in, applies F
+// String — Between<'"', body, '"'> is a component; To lifts Arr<char,32> → Val
 using StrValComp = To<Arr<char,32>, asStr,
     Between<Char<'"'>, QuotedBodyP, Char<'"'>>>;
 
-// Component: match [+-]?digits and lift to Val
-using IntValComp = To<Pair<char,Arr<char,10>>, signedToVal,
-    Seq<SignP, MagP>>;
+// Integer — [+-]? digits → Val
+using MagP = ParseDef<Arr<char,10>, SomeN<ParseDef<char,Digit>,10>>;
+using SignP = ParseDef<char, Opt<Or<Char<'+'>, Char<'-'>>>>;
+using IntValComp = To<Pair<char,Arr<char,10>>, signedToVal, Seq<SignP, MagP>>;
 
-// Complete parser for a value (string or int), with leading whitespace
-// Or<P1,P2> takes components — both StrValComp and IntValComp are component-level To<>
-using ValP = ParseDef<Val, Skip<Many<Space>>, Or<StrValComp, IntValComp>>;
+// All alternatives — tried left to right; Or<P1,P2> takes components
+// null / true / false must come before int (to avoid "null" being parsed as NCName)
+using AnyValComp = Or<NullComp,
+                   Or<TrueComp,
+                   Or<FalseComp,
+                   Or<StrValComp, IntValComp>>>>;
 
 // --- Member: "key" : value ----------------------------------------------------
 
-// Value parser that also skips the leading colon separator
 using ValAfterColonP = ParseDef<Val,
     Skip<Many<Space>, Char<':'>, Many<Space>>,
-    Or<StrValComp, IntValComp>>;
+    AnyValComp>;
 
 using MemberP = ParseDef<Pair<Arr<char,16>,Val>, Seq<KeyP, ValAfterColonP>>;
 
 // --- Object -------------------------------------------------------------------
 
-using CommaP   = Skip<Many<Space>, Char<','>, Many<Space>>;
-using CloseObjP= Skip<Many<Space>, Char<'}'>>;
+using CommaP    = Skip<Many<Space>, Char<','>, Many<Space>>;
+using CloseObjP = Skip<Many<Space>, Char<'}'>>;
 
 using MembersP = ParseDef<Arr<Pair<Arr<char,16>,Val>, 8>,
     SepBy<MemberP, CommaP, 8>>;
 
-using ObjectP  = ParseDef<Arr<Pair<Arr<char,16>,Val>, 8>,
+using ObjectP = ParseDef<Arr<Pair<Arr<char,16>,Val>, 8>,
     Skip<Many<Space>>,
     Between<Char<'{'>, MembersP, CloseObjP>>;
 
 // --- Printer ------------------------------------------------------------------
 
 static void printVal(const Val& v) {
-  if (v.kind == Val::Kind::Str) {
-    cout << '"';
-    for (char c : v.str) cout << c;
-    cout << '"';
-  } else if (v.kind == Val::Kind::Int) {
-    cout << v.i;
-  } else {
-    cout << "null";
+  switch (v.kind) {
+    case Val::Kind::Null: cout << "null";                              break;
+    case Val::Kind::Bool: cout << (v.b ? "true" : "false");           break;
+    case Val::Kind::Int:  cout << v.i;                                 break;
+    case Val::Kind::Str:
+      cout << '"';
+      for (char c : v.str) cout << c;
+      cout << '"';
+      break;
+    default: cout << "?"; break;
   }
 }
 
@@ -131,16 +145,17 @@ void run() {
   cout << "=== JSON flat object parser ===\n\n";
 
   runObj(R"({"sensor":"temp","value":42,"unit":"C"})");
-  runObj(R"({"host":"192.168.1.1","port":8080,"tls":0})");
+  runObj(R"({"active":true,"count":0,"name":"Alice","ref":null})");
+  runObj(R"({"host":"192.168.1.1","port":8080,"tls":false})");
   runObj(R"({"x":-7,"y":0,"z":255})");
-  runObj(R"({ "name" : "Alice" , "age" : 30 })");
+  runObj(R"({ "name" : "Alice" , "age" : 30 , "admin" : false })");
   runObj(R"({})");
-  runObj(R"({"ok":1,"msg":"ready"})");
 
   cout << "=== edge cases ===\n\n";
   runObj(R"(not json)");
   runObj(R"({"unclosed":42)");
   runObj(R"({"k":})");
+  runObj(R"({"tricky":"nullified","flag":true,"n":null})");
 }
 
 // -----------------------------------------------------------------------------
