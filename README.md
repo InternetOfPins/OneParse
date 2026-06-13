@@ -50,6 +50,7 @@ All meta-parsers are components and compose inside `ParserDef` chains. Internall
 | `Or<P1,P2>` | try component `P1`, fall back to `P2`; both share the chain's `T` |
 | `Skip<PP...>` | advance past component chain `PP...`, discard its value |
 | `To<T_in,F,PP...>` | parse `PP...` as `T_in`, apply `F(val)` to produce the outer `T` |
+| `As<T_out,P>` | run complete parser `P`; construct `T_out{P::Type}` — type-directed, no explicit transform |
 | `Seq<P1,P2>` | run complete parsers `P1` then `P2`, yield `Pair<P1::Type, P2::Type>` |
 | `ManyFn<P,F>` | call `F(val)` on each match of complete parser `P` — visitor, zero alloc |
 | `ManyN<P,N>` | collect up to `N` matches of complete parser `P` into `Arr<T,N>` |

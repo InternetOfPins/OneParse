@@ -327,6 +327,24 @@ namespace oneParse {
     };
   };
 
+  // Run complete parser P; construct T_out{P::Type} to produce the outer T
+  // Type-directed variant of To — no explicit transform; T_out must be constructible from P::Type
+  template<typename T_out, typename P>
+  struct As {
+    template<typename O>
+    struct Part : O {
+      using Base = O;
+      using Base::Base;
+      static auto run(Src src) -> typename Base::Result {
+        auto probe = P::run(src);
+        if (!probe.ok) return {false, {}, src};
+        auto r = Base::run(probe.rest);
+        if (r.ok) r.val = T_out{probe.val};
+        return r;
+      }
+    };
+  };
+
   // Call F(val) on each match of complete parser P; always succeeds (zero or more)
   template<typename P, auto F>
   struct ManyFn {
