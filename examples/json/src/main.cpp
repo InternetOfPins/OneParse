@@ -17,6 +17,7 @@
 #endif
 
 #include <iostream>
+#include <string>
 using namespace std;
 
 #include <oneParse/oneParse.h>
@@ -26,10 +27,29 @@ using namespace oneParse;
 
 struct Val {
   enum class Kind : uint8_t { None, Null, Bool, Int, Str } kind = Kind::None;
-  Arr<char,32> str{};
-  int          i = 0;
-  bool         b = false;
+  string str{};
+  int    i = 0;
+  bool   b = false;
 };
+
+// --- Local component: collect chars until '"' into std::string ----------------
+
+struct QuotedBody {
+  template<typename O>
+  struct Part : O {
+    using Base = O;
+    using Base::Base;
+    static auto run(Src src) -> typename Base::Result {
+      string s;
+      while (src && *src && *src != '"') s += *src++;
+      auto r = Base::run(src);
+      if (r.ok) r.val = s;
+      return r;
+    }
+  };
+};
+
+using QuotedP = ParseDef<string, QuotedBody>;
 
 // --- Helpers ------------------------------------------------------------------
 
@@ -39,10 +59,10 @@ static int digitsToInt(Arr<char,10> a) {
   return n;
 }
 
-static Val asNull(char)          { Val v; v.kind = Val::Kind::Null;        return v; }
-static Val asTrue(char)          { Val v; v.kind = Val::Kind::Bool; v.b = true;  return v; }
-static Val asFalse(char)         { Val v; v.kind = Val::Kind::Bool; v.b = false; return v; }
-static Val asStr(Arr<char,32> s) { Val v; v.kind = Val::Kind::Str;  v.str = s;  return v; }
+static Val asNull(char)    { Val v; v.kind = Val::Kind::Null;              return v; }
+static Val asTrue(char)    { Val v; v.kind = Val::Kind::Bool; v.b = true;  return v; }
+static Val asFalse(char)   { Val v; v.kind = Val::Kind::Bool; v.b = false; return v; }
+static Val asStr(string s) { Val v; v.kind = Val::Kind::Str;  v.str = s;   return v; }
 
 static Val signedToVal(Pair<char,Arr<char,10>> p) {
   Val v;
@@ -57,32 +77,25 @@ constexpr const char kNull[]  = "null";
 constexpr const char kTrue[]  = "true";
 constexpr const char kFalse[] = "false";
 
-// --- String parser ------------------------------------------------------------
+// --- Key parser ---------------------------------------------------------------
 
-using QuotedBodyP = ParseDef<Arr<char,32>, ManyN<ParseDef<char, Not<Char<'"'>>>, 32>>;
-using KeyBodyP    = ParseDef<Arr<char,16>, ManyN<ParseDef<char, Not<Char<'"'>>>, 16>>;
-using KeyP        = ParseDef<Arr<char,16>,
+using KeyP = ParseDef<string,
     Skip<Many<Space>>,
-    Between<Char<'"'>, KeyBodyP, Char<'"'>>>;
+    Between<Char<'"'>, QuotedP, Char<'"'>>>;
 
 // --- Value components (each lifts its result to Val) --------------------------
 
-// Keywords — Str<S> matches the literal, To maps the dummy char result to Val
 using NullComp  = To<char, asNull,  Str<kNull>>;
 using TrueComp  = To<char, asTrue,  Str<kTrue>>;
 using FalseComp = To<char, asFalse, Str<kFalse>>;
 
-// String — Between<'"', body, '"'> is a component; To lifts Arr<char,32> → Val
-using StrValComp = To<Arr<char,32>, asStr,
-    Between<Char<'"'>, QuotedBodyP, Char<'"'>>>;
+using StrValComp = To<string, asStr,
+    Between<Char<'"'>, QuotedP, Char<'"'>>>;
 
-// Integer — [+-]? digits → Val
 using MagP = ParseDef<Arr<char,10>, SomeN<ParseDef<char,Digit>,10>>;
 using SignP = ParseDef<char, Opt<Or<Char<'+'>, Char<'-'>>>>;
 using IntValComp = To<Pair<char,Arr<char,10>>, signedToVal, Seq<SignP, MagP>>;
 
-// All alternatives — tried left to right; Or<P1,P2> takes components
-// null / true / false must come before int (to avoid "null" being parsed as NCName)
 using AnyValComp = Or<NullComp,
                    Or<TrueComp,
                    Or<FalseComp,
@@ -94,17 +107,17 @@ using ValAfterColonP = ParseDef<Val,
     Skip<Many<Space>, Char<':'>, Many<Space>>,
     AnyValComp>;
 
-using MemberP = ParseDef<Pair<Arr<char,16>,Val>, Seq<KeyP, ValAfterColonP>>;
+using MemberP = ParseDef<Pair<string,Val>, Seq<KeyP, ValAfterColonP>>;
 
 // --- Object -------------------------------------------------------------------
 
 using CommaP    = Skip<Many<Space>, Char<','>, Many<Space>>;
 using CloseObjP = Skip<Many<Space>, Char<'}'>>;
 
-using MembersP = ParseDef<Arr<Pair<Arr<char,16>,Val>, 8>,
+using MembersP = ParseDef<Arr<Pair<string,Val>, 8>,
     SepBy<MemberP, CommaP, 8>>;
 
-using ObjectP = ParseDef<Arr<Pair<Arr<char,16>,Val>, 8>,
+using ObjectP = ParseDef<Arr<Pair<string,Val>, 8>,
     Skip<Many<Space>>,
     Between<Char<'{'>, MembersP, CloseObjP>>;
 
@@ -112,14 +125,10 @@ using ObjectP = ParseDef<Arr<Pair<Arr<char,16>,Val>, 8>,
 
 static void printVal(const Val& v) {
   switch (v.kind) {
-    case Val::Kind::Null: cout << "null";                              break;
-    case Val::Kind::Bool: cout << (v.b ? "true" : "false");           break;
-    case Val::Kind::Int:  cout << v.i;                                 break;
-    case Val::Kind::Str:
-      cout << '"';
-      for (char c : v.str) cout << c;
-      cout << '"';
-      break;
+    case Val::Kind::Null: cout << "null";                    break;
+    case Val::Kind::Bool: cout << (v.b ? "true" : "false"); break;
+    case Val::Kind::Int:  cout << v.i;                       break;
+    case Val::Kind::Str:  cout << '"' << v.str << '"';       break;
     default: cout << "?"; break;
   }
 }
@@ -130,9 +139,7 @@ static void runObj(const char* input) {
   if (!r.ok) { cout << "  -> parse error\n\n"; return; }
   cout << "  -> {\n";
   for (size_t i = 0; i < r.val.len; i++) {
-    cout << "       \"";
-    for (char c : r.val.data[i].fst) cout << c;
-    cout << "\": ";
+    cout << "       \"" << r.val.data[i].fst << "\": ";
     printVal(r.val.data[i].snd);
     cout << "\n";
   }
