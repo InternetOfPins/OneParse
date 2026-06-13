@@ -59,6 +59,11 @@ namespace oneParse {
     const T* end()     const { return data + len; }
   };
 
+  // --- Zero-width tag ---------------------------------------------------------
+  // Components that can succeed without consuming input inherit from this.
+  // Many<P> and Some<P> declare rules() that reject ZeroWidth inner components.
+  struct ZeroWidthTag {};
+
   // --- String literal component ----------------------------------------------
 
   // Match the null-terminated string S exactly; on failure does not consume input
@@ -199,7 +204,7 @@ namespace oneParse {
   // Match zero or one occurrence of component P; always succeeds
   // On match: advances input and sets r.val; on no match: leaves input and val untouched
   template<typename P>
-  struct Opt {
+  struct Opt : ZeroWidthTag {
     template<typename O>
     struct Part : O {
       using Base = O;
@@ -220,6 +225,7 @@ namespace oneParse {
   // r.val is left for the chain to fill — use r.rest vs original src for the span
   template<typename P>
   struct Some {
+    static_assert(!std::is_base_of_v<ZeroWidthTag, P>, "Some<P>: P is zero-width — infinite loop");
     template<typename O>
     struct Part : O {
       using Base = O;
@@ -242,7 +248,8 @@ namespace oneParse {
   // r.val is left for the chain to fill — use r.rest vs original src for the span
   // For alternatives use Many<Or<P1,P2>>
   template<typename P>
-  struct Many {
+  struct Many : ZeroWidthTag {
+    static_assert(!std::is_base_of_v<ZeroWidthTag, P>, "Many<P>: P is zero-width — infinite loop");
     template<typename O>
     struct Part : O {
       using Base = O;
@@ -257,6 +264,7 @@ namespace oneParse {
       }
     };
   };
+
 
   // Advance past component chain PP... without contributing a value to the chain
   template<typename... PP>
@@ -450,7 +458,7 @@ namespace oneParse {
   };
 
   // Succeed only at end of input
-  struct Eof {
+  struct Eof : ZeroWidthTag {
     template<typename O>
     struct Part : O {
       using Base = O;
@@ -461,6 +469,7 @@ namespace oneParse {
       }
     };
   };
+
 
   // Advance past component P zero or more times, stopping when End matches
   // End is checked before P on each step; does not consume End

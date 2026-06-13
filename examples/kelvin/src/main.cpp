@@ -24,7 +24,11 @@ using namespace oneParse;
 
 // --- AST node -----------------------------------------------------------------
 
-struct Kelvin { int temp; char unit; };
+struct Kelvin {
+  int temp; char unit;
+  Kelvin() = default;
+  explicit Kelvin(Pair<int,char> p) : temp(p.fst), unit(p.snd) {}
+};
 
 // --- Helpers ------------------------------------------------------------------
 
@@ -37,8 +41,6 @@ static int arrToInt(Arr<char,10> a) {
 static int signedInt(Pair<char, Arr<char,10>> p) {
   return (p.fst == '-' ? -1 : 1) * arrToInt(p.snd);
 }
-
-static Kelvin makeKelvin(Pair<int,char> p) { return {p.fst, p.snd}; }
 
 // --- Parser definition --------------------------------------------------------
 
@@ -56,11 +58,11 @@ using SignedIntP = ParseDef<int,
 // string literal for the prefix (constexpr variable required by C++17 NTTP rules)
 constexpr const char kPrefix[] = "temp: ";
 
-// skip prefix, then (signed int + 'K')  →  Kelvin node
-using RawKelvinP = ParseDef<Kelvin,
-    Str<kPrefix>,
-    To<Pair<int,char>, makeKelvin,
-        Seq<SignedIntP, ParseDef<char, Char<'K'>>>>>;
+// int + 'K'  →  Pair<int,char> — input to As<Kelvin>
+using KelvinPairP = ParseDef<Pair<int,char>, Seq<SignedIntP, ParseDef<char, Char<'K'>>>>;
+
+// skip prefix, then As<Kelvin> constructs directly from Pair<int,char>
+using RawKelvinP = ParseDef<Kelvin, Str<kPrefix>, As<Kelvin, KelvinPairP>>;
 
 // reject below absolute zero inline — mirrors paco's .verify(o => o.temp >= 0)
 constexpr bool isPositiveKelvin(Kelvin k) { return k.temp >= 0; }
