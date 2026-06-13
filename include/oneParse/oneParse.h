@@ -35,12 +35,19 @@ namespace oneParse {
   };
 
   // Composition wrapper — mirrors OneData's DataDef pattern
+  // Exposes Chain-style Build/App/Ins so ParseDef participates in HAPI's meta-world:
+  //   SomeParser::Ins<NewComp>   — append component at end
+  //   SomeParser::App<NewComp>   — prepend component at front
+  //   SomeParser::Build<W>       — unpack OO... into W<OO...>
   template<typename T, typename... OO>
   struct ParseDef : APIOf<ParseAPI<T>, OO...> {
     using Base = APIOf<ParseAPI<T>, OO...>;
     using Base::Base;
     using Type   = T;
     using Result = Res<T>;
+    template<template<typename...> class W> using Build = W<OO...>;
+    template<typename... XX> using App = ParseDef<T, XX..., OO...>;
+    template<typename... XX> using Ins = ParseDef<T, OO..., XX...>;
   };
 
   // --- Utilities -------------------------------------------------------------
@@ -610,3 +617,23 @@ namespace oneParse {
   using Space = Satisfy<isSpace>;
 
 }; // namespace oneParse
+
+// ParseDef is a first-class HAPI citizen — all meta-tools traverse it like APIOf
+namespace hapi {
+  template<typename F, typename T, typename... OO>
+  struct Map<F, oneParse::ParseDef<T, OO...>> {
+    using Expr = oneParse::ParseDef<T, typename Map<F, OO>::Expr...>;
+  };
+
+  template<typename P, typename T, typename... OO>
+  struct FilterIf<P, oneParse::ParseDef<T, OO...>> {
+  private:
+    using Filtered = typename FilterIf<P, Chain<OO...>>::Expr;
+    template<typename C> struct Rebuild;
+    template<typename... XX> struct Rebuild<Chain<XX...>> {
+      using type = oneParse::ParseDef<T, XX...>;
+    };
+  public:
+    using Expr = typename Rebuild<Filtered>::type;
+  };
+};

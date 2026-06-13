@@ -4,11 +4,14 @@
 //   NCName ::= NameStartChar (NameChar)*
 //   Expr   ::= Term (('+' | '-') Term)*
 //
-// AST types follow paco-ebnf naming: Grammar, Production, Choice, Item, Primary
+// Recursion cycle: PrimaryP → ChoiceP → SequenceP → ItemP → PrimaryP
 //
-// Recursion: Primary can contain a Group which holds a Choice.
-// Template cycle is broken via Defer<Choice, parseChoice> (library combinator)
-// and a static arena for Group Choice nodes.
+// Broken by: parseChoiceImpl() is forward-declared before PrimaryCollect is defined;
+//            its body is defined after ChoiceP is complete (the Defer pattern).
+//
+// Leaf parsers and PrimaryCollect / SequenceCollect remain as custom structs
+// because they contain complex branching / lookahead logic.
+// ItemP, ChoiceP, ProductionP, GrammarP are pure combinators.
 
 #ifdef ARDUINO
   #include <Arduino.h>
@@ -40,7 +43,9 @@ struct Item {
 using Sequence = Arr<Item, 8>;   // items in one sequential alternative
 
 struct Choice {
-  Arr<Sequence, 6> alts;         // alternatives separated by '|'
+  Arr<Sequence, 6> alts;
+  Choice() = default;
+  explicit Choice(Arr<Sequence, 6> a) : alts(a) {}  // needed by As<Choice, AltArrP>
 };
 
 struct Production {
@@ -61,7 +66,6 @@ static void    resetPool()  { gPoolN = 0; }
 
 // ─── Leaf parsers (template-based, no recursion) ─────────────────────────────
 
-// NCName: starts with letter or '_', continues with letter/digit/'-'/'.'
 constexpr bool isNameStart(char c) {
   return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||c=='_';
 }
@@ -78,7 +82,7 @@ struct NCNameCollect {
       if (!src || !isNameStart(*src)) return {false,{},src};
       Arr<char,32> arr{};
       while (src && *src && isNameChar(*src)) {
-        if (!arr.push(*src)) return {false,{},src}; // overflow
+        if (!arr.push(*src)) return {false,{},src};
         ++src;
       }
       auto r = Base::run(src);
@@ -96,7 +100,7 @@ using StringLiteralP = ParseDef<Arr<char,32>,
     Or<Between<Char<'\''>, SQBody, Char<'\''>>,
        Between<Char<'"'>,  DQBody, Char<'"'>>>>;
 
-// CharCode: #xHH... (hex char reference)
+// CharCode: #xHH...
 constexpr bool isHexD(char c) {
   return (c>='0'&&c<='9')||(c>='a'&&c<='f')||(c>='A'&&c<='F');
 }
@@ -105,144 +109,148 @@ using CharCodeP = ParseDef<Arr<char,32>,
     Skip<Str<kHashX>>,
     SomeN<ParseDef<char,Satisfy<isHexD>>,32>>;
 
-// CharClass: [...] content captured verbatim (e.g. "0-9", "a-zA-Z_")
+// CharClass: [...] content captured verbatim
 using CharClassBody = ParseDef<Arr<char,32>, ManyN<ParseDef<char, Not<Char<']'>>>, 32>>;
 using CharClassP    = ParseDef<Arr<char,32>, Between<Char<'['>, CharClassBody, Char<']'>>>;
 
-// Whitespace + block comments (/* ... */)
+// Whitespace component and complete parser
 constexpr const char kCOpen[]  = "/*";
 constexpr const char kCClose[] = "*/";
 using CommentSkip = Skip<Str<kCOpen>, ManyTill<Any, Str<kCClose>>, Str<kCClose>>;
-using WsP         = ParseDef<char, Many<Or<Space, CommentSkip>>>;
+using Ws          = Many<Or<Space, CommentSkip>>;   // component: zero-width ws skip
+using WsP         = ParseDef<char, Ws>;             // complete parser for skipWs()
 
-static Src skipWs(Src src) { return WsP::run(src).rest; } // Many always ok
+static Src skipWs(Src src) { return WsP::run(src).rest; }
 
-// Production separator
+// Production separator literal
 constexpr const char kDef[] = "::=";
 using DefP = ParseDef<char, Str<kDef>>;
 
-// ─── Recursive parsers ────────────────────────────────────────────────────────
-// parseChoice is forward-declared so parsePrimary can use it for '(' Choice ')'
-// Defer<Choice, parseChoice> makes this usable inside any ParseDef chain too.
+// ─── Forward declaration — breaks PrimaryCollect → ChoiceP template cycle ────
+//
+// PrimaryCollect calls parseChoiceImpl at runtime (group case: '(' Choice ')').
+// parseChoiceImpl is forward-declared here so PrimaryCollect can reference it.
+// Its body is defined after ChoiceP is complete — this is the Defer pattern
+// expressed at the function level rather than the combinator level.
 
-static Res<Choice> parseChoice(Src src); // forward
+static Res<Choice> parseChoiceImpl(Src src);
 
-static Quant parseQuant(Src& src) {
-  if (src && (*src=='?'||*src=='*'||*src=='+')) return (Quant)*src++;
-  return Quant::None;
-}
+// ─── PrimaryCollect ───────────────────────────────────────────────────────────
+// Custom struct: 5 distinct output kinds, pool allocation for Group.
+// Calls parseChoiceImpl (forward-declared above) for the '(' Choice ')' case.
 
-static Res<Primary> parsePrimary(Src src) {
-  Primary p{};
-  src = skipWs(src);
-  if (!src || !*src) return {false,{},src};
+struct PrimaryCollect {
+  template<typename O>
+  struct Part : O {
+    using Base = O;
+    using Base::Base;
+    static auto run(Src src) -> typename Base::Result {
+      Primary p{};
 
-  // Group: '(' Choice ')' — uses Defer concept: parseChoice called at runtime
-  if (*src == '(') {
-    auto inner = parseChoice(src + 1);
-    if (inner.ok) {
-      Src ws = skipWs(inner.rest);
-      if (ws && *ws == ')') {
-        Choice* c = allocGroup();
-        if (!c) return {false,{},src}; // pool exhausted
-        *c = inner.val;
-        p.kind  = Primary::Kind::Group;
-        p.group = c;
-        return {true, p, ws + 1};
+      // CharCode before NCName — '#' is not a valid name start anyway
+      { auto r = CharCodeP::run(src);
+        if (r.ok) { p.kind=Primary::Kind::CharCode; p.text=r.val;
+                    auto res=Base::run(r.rest); if(res.ok) res.val=p; return res; } }
+
+      { auto r = CharClassP::run(src);
+        if (r.ok) { p.kind=Primary::Kind::CharClass; p.text=r.val;
+                    auto res=Base::run(r.rest); if(res.ok) res.val=p; return res; } }
+
+      { auto r = StringLiteralP::run(src);
+        if (r.ok) { p.kind=Primary::Kind::Str; p.text=r.val;
+                    auto res=Base::run(r.rest); if(res.ok) res.val=p; return res; } }
+
+      // Group: '(' Choice ')' — parseChoiceImpl is the deferred function
+      if (src && *src == '(') {
+        auto inner = parseChoiceImpl(src + 1);
+        if (inner.ok) {
+          Src ws = skipWs(inner.rest);
+          if (ws && *ws == ')') {
+            Choice* c = allocGroup();
+            if (!c) return {false,{},src};
+            *c = inner.val;
+            p.kind = Primary::Kind::Group; p.group = c;
+            auto res = Base::run(ws + 1); if(res.ok) res.val=p; return res;
+          }
+        }
+        return {false,{},src};
       }
+
+      { auto r = NCNameP::run(src);
+        if (r.ok) { p.kind=Primary::Kind::Name; p.text=r.val;
+                    auto res=Base::run(r.rest); if(res.ok) res.val=p; return res; } }
+
+      return {false,{},src};
     }
-    return {false,{},src}; // '(' without ')' — fail, don't try other alternatives
-  }
+  };
+};
+using PrimaryP = ParseDef<Primary, Skip<Ws>, PrimaryCollect>;
 
-  // CharCode: #xNN (before NCName — '#' not a valid name start anyway)
-  { auto r = CharCodeP::run(src);
-    if (r.ok) { p.kind=Primary::Kind::CharCode; p.text=r.val; return {true,p,r.rest}; } }
+// ─── Item = Primary + optional quantifier ─────────────────────────────────────
 
-  // CharClass: [...]
-  { auto r = CharClassP::run(src);
-    if (r.ok) { p.kind=Primary::Kind::CharClass; p.text=r.val; return {true,p,r.rest}; } }
-
-  // StringLiteral: '...' or "..."
-  { auto r = StringLiteralP::run(src);
-    if (r.ok) { p.kind=Primary::Kind::Str; p.text=r.val; return {true,p,r.rest}; } }
-
-  // NCName — last, catches identifiers and rule references
-  { auto r = NCNameP::run(src);
-    if (r.ok) { p.kind=Primary::Kind::Name; p.text=r.val; return {true,p,r.rest}; } }
-
-  return {false,{},src};
+static Item makeItem(Pair<Primary,char> p) {
+  return {p.fst, p.snd ? (Quant)p.snd : Quant::None};
 }
+using QuantCharP = ParseDef<char, Opt<AnyOf<'?','*','+'>>>;
+using ItemP = ParseDef<Item,
+    To<Pair<Primary,char>, makeItem,
+        Seq<PrimaryP, QuantCharP>>>;
 
-static Res<Item> parseItem(Src src) {
-  auto pr = parsePrimary(src);
-  if (!pr.ok) return {false,{},src};
-  Item it;
-  it.prim  = pr.val;
-  it.quant = parseQuant(pr.rest);
-  return {true, it, pr.rest};
-}
+// ─── Sequence: items until '|', ')', production boundary, or EOF ──────────────
+// Custom struct: stop condition requires lookahead (production boundary: NCName ::=)
 
-static Res<Sequence> parseSequence(Src src) {
-  Sequence seq{};
-  while (true) {
-    Src ws = skipWs(src);
-    // natural stop tokens
-    if (!ws || !*ws || *ws=='|' || *ws==')') break;
-    // production boundary: NCName followed by ::= is a new rule, not an item
-    { auto n = NCNameP::run(ws);
-      if (n.ok && DefP::run(skipWs(n.rest)).ok) break; }
-    auto ir = parseItem(ws);
-    if (!ir.ok) break;
-    if (!seq.push(ir.val)) break; // overflow
-    src = ir.rest;
-  }
-  return {true, seq, src};
-}
+struct SequenceCollect {
+  template<typename O>
+  struct Part : O {
+    using Base = O;
+    using Base::Base;
+    static auto run(Src src) -> typename Base::Result {
+      Sequence seq{};
+      while (true) {
+        Src ws = skipWs(src);
+        if (!ws || !*ws || *ws=='|' || *ws==')') break;
+        // production boundary: NCName immediately followed by ::=
+        { auto n = NCNameP::run(ws);
+          if (n.ok && DefP::run(skipWs(n.rest)).ok) break; }
+        auto ir = ItemP::run(src);
+        if (!ir.ok) break;
+        if (!seq.push(ir.val)) break;
+        src = ir.rest;
+      }
+      auto r = Base::run(src);
+      if (r.ok) r.val = seq;
+      return r;
+    }
+  };
+};
+using SequenceP = ParseDef<Sequence, SequenceCollect>;
 
-static Res<Choice> parseChoice(Src src) {
-  Choice ch{};
-  auto seq = parseSequence(src);
-  if (!ch.alts.push(seq.val)) return {false,{},src};
-  src = seq.rest;
-  while (src) {
-    Src ws = skipWs(src);
-    if (!ws || *ws != '|') break;
-    ws++;
-    auto seq2 = parseSequence(ws);
-    if (!ch.alts.push(seq2.val)) break; // overflow (max 6 alts)
-    src = seq2.rest;
-  }
-  return {true, ch, src};
-}
+// ─── Choice = alternatives separated by '|' ──────────────────────────────────
+//
+// SepBy1<SequenceP, Sep, 6>: collect SequenceP-separated-by-'|' into Arr<Sequence,6>
+// As<Choice, AltArrP>: construct Choice{arr} using the constructor added above
 
-static Res<Production> parseProduction(Src src) {
-  src = skipWs(src);
-  auto nameR = NCNameP::run(src);
-  if (!nameR.ok) return {false,{},src};
-  src = skipWs(nameR.rest);
-  auto defR = DefP::run(src);
-  if (!defR.ok) return {false,{},src};
-  src = skipWs(defR.rest);
-  auto choiceR = parseChoice(src);
-  Production prod{};
-  prod.name = nameR.val;
-  prod.rhs  = choiceR.val;
-  return {true, prod, choiceR.rest};
-}
+using AltArrP = ParseDef<Arr<Sequence,6>, SepBy1<SequenceP, Skip<Ws, Char<'|'>>, 6>>;
+using ChoiceP = ParseDef<Choice, As<Choice, AltArrP>>;
 
-static Grammar parseGrammar(Src src) {
-  Grammar g{};
-  resetPool();
-  while (src && *src) {
-    src = skipWs(src);
-    if (!src || !*src) break;
-    auto pr = parseProduction(src);
-    if (!pr.ok) break; // unrecognised token — stop
-    if (!g.push(pr.val)) break; // grammar overflow
-    src = pr.rest;
-  }
-  return g;
+// ─── Defer pattern: body defined here — ChoiceP is now complete ──────────────
+
+static Res<Choice> parseChoiceImpl(Src src) { return ChoiceP::run(src); }
+
+// ─── Production = NCName '::=' Choice ────────────────────────────────────────
+
+static Production makeProduction(Pair<Arr<char,32>,Choice> p) {
+  Production prod{}; prod.name=p.fst; prod.rhs=p.snd; return prod;
 }
+using WsNCNameP      = ParseDef<Arr<char,32>, Skip<Ws>, NCNameCollect>;
+using ChoiceAfterDefP = ParseDef<Choice, Skip<Ws, Str<kDef>, Ws>, As<Choice, AltArrP>>;
+using ProductionP    = ParseDef<Production,
+    To<Pair<Arr<char,32>,Choice>, makeProduction,
+        Seq<WsNCNameP, ChoiceAfterDefP>>>;
+
+// ─── Grammar = many productions ──────────────────────────────────────────────
+
+using GrammarP = ParseDef<Grammar, ManyN<ProductionP, 16>>;
 
 // ─── Printer ─────────────────────────────────────────────────────────────────
 
@@ -298,13 +306,14 @@ Factor ::= Int | Ident | '(' Expr ')'
 )";
 
 void run() {
-  auto g = parseGrammar(kGrammar);
-  cout << "Grammar: " << g.len << " productions"
+  resetPool();
+  auto g = GrammarP::run(kGrammar);
+  cout << "Grammar: " << g.val.len << " productions"
        << "  (groups in pool: " << gPoolN << ")\n\n";
-  for (size_t i = 0; i < g.len; i++) {
-    printArr(g.data[i].name);
+  for (size_t i = 0; i < g.val.len; i++) {
+    printArr(g.val.data[i].name);
     cout << "  ::=  ";
-    printChoice(g.data[i].rhs);
+    printChoice(g.val.data[i].rhs);
     cout << "\n";
   }
 }
