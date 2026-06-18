@@ -10,7 +10,8 @@
 // Stdout: parser_name,input_path,bytes,iterations,median_ms
 
 // Guard: empty translation unit when compiled without -DPARSER_XXX (e.g. by a library scanner)
-#if defined(PARSER_STRLEN) || defined(PARSER_ONEPARSE) || defined(PARSER_SPIRIT)
+#if defined(PARSER_STRLEN) || defined(PARSER_ONEPARSE) || defined(PARSER_ONEPARSE_NOKEY) \
+ || defined(PARSER_SPIRIT) || defined(PARSER_LEXY)
 
 #include <chrono>
 #include <fstream>
@@ -37,26 +38,31 @@ static std::string read_file(const char* path) {
 static const char PARSER_NAME[] = "strlen";
 static void parse(const char* s) { volatile std::size_t n = std::strlen(s); (void)n; }
 
-// ─── OneParse ──────────────────────────────────────────────────────────────
+// ─── OneParse (full + nokey variants) ─────────────────────────────────────
 //
-// Stores results in Arr<Pair<string,Val>,8> — stack-allocated container,
-// heap-allocated std::string per key and string value.
+// full    (PARSER_ONEPARSE):        Arr<Pair<string_view,Val>,8> — keys + typed values
+// nokey   (PARSER_ONEPARSE_NOKEY):  Arr<Val,8>                  — typed values, keys discarded
 
-#elif defined(PARSER_ONEPARSE)
+#elif defined(PARSER_ONEPARSE) || defined(PARSER_ONEPARSE_NOKEY)
 
 #include <hapi/hapi.h>
 #include <oneParse/oneParse.h>
 using namespace oneParse;
 
+#if defined(PARSER_ONEPARSE)
 static const char PARSER_NAME[] = "oneParse";
+#else
+static const char PARSER_NAME[] = "op-nokey";
+#endif
 
 struct Val {
     enum class Kind : uint8_t { None, Null, Bool, Int, Str } kind = Kind::None;
-    std::string_view str{};  // view into source buffer — no heap allocation
+    std::string_view str{};
     int  i = 0;
     bool b = false;
 };
 
+// Store quoted string content as string_view into source buffer
 struct QuotedBody {
     template<typename O> struct Part : O {
         using Base = O;
@@ -71,6 +77,18 @@ struct QuotedBody {
     };
 };
 using QuotedP = ParseDef<std::string_view, QuotedBody>;
+
+// Advance past quoted string content without storing anything
+struct QuotedSkip {
+    template<typename O> struct Part : O {
+        using Base = O;
+        using Base::Base;
+        static auto run(Src src) -> typename Base::Result {
+            while (src && *src && *src != '"') ++src;
+            return Base::run(src);
+        }
+    };
+};
 
 static int digitsToInt(Arr<char,10> a) {
     int n = 0;
@@ -88,8 +106,6 @@ constexpr const char kNull[]  = "null";
 constexpr const char kTrue[]  = "true";
 constexpr const char kFalse[] = "false";
 
-using KeyP     = ParseDef<std::string_view, SkipWs,
-                           Between<Char<'"'>, QuotedP, Char<'"'>>>;
 using MagP     = ParseDef<Arr<char,10>, SomeN<ParseDef<char,Digit>,10>>;
 using SignP    = ParseDef<char, Opt<Or<Char<'+'>, Char<'-'>>>>;
 using StrComp  = To<std::string_view, asStr, Between<Char<'"'>, QuotedP, Char<'"'>>>;
@@ -102,15 +118,34 @@ using ValComp  = Or<FirstChar<'"', StrComp>,
                 Or<FirstChar<'t', TrueComp>,
                 Or<FirstChar<'f', FalseComp>,
                                   IntComp>>>>;
-using ColonP   = ParseDef<Val, Skip<SkipWs, Char<':'>, SkipWs>, ValComp>;
-using MemberP  = ParseDef<Pair<std::string_view,Val>, Seq<KeyP, ColonP>>;
 using CommaP   = Skip<SkipWs, Char<','>, SkipWs>;
 using CloseP   = Skip<SkipWs, Char<'}'>>;
+
+#if defined(PARSER_ONEPARSE)
+
+using KeyP     = ParseDef<std::string_view, SkipWs,
+                           Between<Char<'"'>, QuotedP, Char<'"'>>>;
+using ColonP   = ParseDef<Val, Skip<SkipWs, Char<':'>, SkipWs>, ValComp>;
+using MemberP  = ParseDef<Pair<std::string_view,Val>, Seq<KeyP, ColonP>>;
 using BodyP    = ParseDef<Arr<Pair<std::string_view,Val>,8>, SepBy<MemberP, CommaP, 8>>;
 using ObjectP  = ParseDef<Arr<Pair<std::string_view,Val>,8>,
     Skip<Many<Space>>, Between<Char<'{'>, BodyP, CloseP>>;
 
 static void parse(const char* s) { (void)ObjectP::run(s); }
+
+#else // PARSER_ONEPARSE_NOKEY
+
+// Skip<SkipWs, Char<'"'>, QuotedSkip, Char<'"'>, SkipWs, Char<':'>, SkipWs>
+// advances past the entire  "key" :  prefix; ValComp downstream provides the value.
+using SkipKeyColon = Skip<SkipWs, Char<'"'>, QuotedSkip, Char<'"'>, SkipWs, Char<':'>, SkipWs>;
+using NoKeyMemberP = ParseDef<Val, SkipKeyColon, ValComp>;
+using BodyNoKeyP   = ParseDef<Arr<Val,8>, SepBy<NoKeyMemberP, CommaP, 8>>;
+using ObjectNoKeyP = ParseDef<Arr<Val,8>,
+    Skip<Many<Space>>, Between<Char<'{'>, BodyNoKeyP, CloseP>>;
+
+static void parse(const char* s) { (void)ObjectNoKeyP::run(s); }
+
+#endif
 
 // ─── Spirit.X3 ─────────────────────────────────────────────────────────────
 //
@@ -125,8 +160,7 @@ namespace x3 = boost::spirit::x3;
 static const char PARSER_NAME[] = "spirit.x3";
 
 static void parse(const char* s) {
-    std::string in(s);
-    auto it = in.cbegin();
+    const char* end = s + std::strlen(s);
 
     // key: quoted string → std::string content (quotes stripped)
     auto const quoted_key = x3::lexeme[
@@ -134,9 +168,7 @@ static void parse(const char* s) {
     ];
 
     // value: quoted or unquoted — scan and discard
-    // quoted_val attribute: std::string (content between quotes)
     auto const quoted_val = x3::lit('"') >> *(x3::char_ - '"') >> x3::lit('"');
-    // word_val: null/true/false/numbers — any char not a delimiter
     auto const word_val   = x3::lexeme[+(x3::char_ - x3::char_(",} \t\n\r"))];
     auto const value      = x3::omit[quoted_val | word_val];
 
@@ -145,9 +177,68 @@ static void parse(const char* s) {
 
     // object: { member (, member)* }
     std::vector<std::string> keys;
-    x3::phrase_parse(it, in.cend(),
+    x3::phrase_parse(s, end,
         x3::lit('{') >> -(member % x3::lit(',')) >> x3::lit('}'),
         x3::space, keys);
+}
+
+// ─── lexy ──────────────────────────────────────────────────────────────────
+//
+// Stores keys as std::vector<std::string>; values are scanned but discarded.
+// Grammar: quoted key + colon + (quoted|alnum+) value, whitespace-skipped.
+
+#elif defined(PARSER_LEXY)
+
+#include <lexy/action/parse.hpp>
+#include <lexy/callback.hpp>
+#include <lexy/dsl.hpp>
+#include <lexy/input/string_input.hpp>
+#include <vector>
+
+static const char PARSER_NAME[] = "lexy";
+
+namespace grammar {
+    namespace dsl = lexy::dsl;
+
+    // double-quoted string content → std::string
+    struct key_prod : lexy::token_production {
+        static constexpr auto rule  = dsl::quoted(dsl::ascii::print);
+        static constexpr auto value = lexy::as_string<std::string>;
+    };
+
+    // value: quoted string | bare alnum+ (null/true/false/int) — discard
+    struct val_prod : lexy::token_production {
+        static constexpr auto rule = [] {
+            auto q    = dsl::quoted(dsl::ascii::print);
+            auto word = dsl::while_one(dsl::ascii::alnum);
+            return q | word;
+        }();
+        static constexpr auto value = lexy::noop;
+    };
+
+    // member: "key" : value → key as std::string
+    struct member {
+        static constexpr auto whitespace = dsl::ascii::space;
+        static constexpr auto rule =
+            dsl::p<key_prod> + dsl::colon + dsl::p<val_prod>;
+        static constexpr auto value = lexy::callback<std::string>(
+            [](std::string key) { return key; }
+        );
+    };
+
+    // object: { member (, member)* }
+    struct object {
+        static constexpr auto whitespace = dsl::ascii::space;
+        static constexpr auto rule =
+            dsl::curly_bracketed.opt_list(dsl::p<member>, dsl::sep(dsl::comma));
+        static constexpr auto value = lexy::as_list<std::vector<std::string>>;
+    };
+}
+
+static void parse(const char* s) {
+    auto input  = lexy::zstring_input(s);
+    auto result = lexy::parse<grammar::object>(input, lexy::noop);
+    (void)result;
 }
 
 #endif // inner parser selection

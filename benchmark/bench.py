@@ -22,6 +22,7 @@ CHART_OUT    = os.path.join(BENCH_DIR, "bench_runtime.png")
 LIBRARY_JSON = os.path.join(BENCH_DIR, "..", "library.json")
 HAPI_INC     = os.path.join(BENCH_DIR, "..", "..", "HAPI", "include")
 OP_INC       = os.path.join(BENCH_DIR, "..", "include")
+LEXY_INC     = os.path.join(BENCH_DIR, "lexy_src", "include")
 
 os.makedirs(BUILD_DIR,   exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -35,13 +36,17 @@ CSV_FIELDS = ["date", "version", "parser", "input",
               "bytes", "iters", "median_ms", "throughput_mbs"]
 
 PARSERS = [
-    ("strlen",    ["-DPARSER_STRLEN"]),
-    ("oneParse",  ["-DPARSER_ONEPARSE",
+    ("strlen",    ["-std=c++17", "-DPARSER_STRLEN"]),
+    ("oneParse",  ["-std=c++17", "-DPARSER_ONEPARSE",
                    f"-I{OP_INC}", f"-I{HAPI_INC}"]),
-    ("spirit.x3", ["-DPARSER_SPIRIT"]),
+    ("op-nokey",  ["-std=c++17", "-DPARSER_ONEPARSE_NOKEY",
+                   f"-I{OP_INC}", f"-I{HAPI_INC}"]),
+    ("spirit.x3", ["-std=c++17", "-DPARSER_SPIRIT"]),
+    ("lexy",      ["-std=c++20", "-DPARSER_LEXY",
+                   f"-I{LEXY_INC}"]),
 ]
 
-BASE_FLAGS = ["g++", "-std=c++17", "-O2"]
+BASE_FLAGS = ["g++", "-O2"]
 
 # ── Version ─────────────────────────────────────────────────────────────────
 
@@ -55,7 +60,7 @@ print("=== Compiling ===")
 binaries = {}
 for name, extra_flags in PARSERS:
     exe = os.path.join(BUILD_DIR, "bench_" + name.replace(".", "_"))
-    cmd = BASE_FLAGS + extra_flags + ["-o", exe, SRC]
+    cmd = BASE_FLAGS + extra_flags + ["-o", exe, SRC]  # std flag is in extra_flags
     print(f"  {name:12} ... ", end="", flush=True)
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode != 0:
@@ -114,14 +119,15 @@ with open(HISTORY_CSV, newline="") as f:
 
 # ── Plot ─────────────────────────────────────────────────────────────────────
 
-COLORS  = {"oneParse": "green", "spirit.x3": "red", "strlen": "gray"}
+COLORS  = {"oneParse": "green", "op-nokey": "limegreen",
+           "spirit.x3": "red", "strlen": "gray", "lexy": "steelblue"}
 MARKERS = {"small.json": "o", "medium.json": "s", "large.json": "^"}
 
-fig = plt.figure(figsize=(16, 7), layout="constrained")
+fig = plt.figure(figsize=(18, 7), layout="constrained")
 gs  = gridspec.GridSpec(1, 2, figure=fig, wspace=0.35)
 fig.suptitle(
     f"OneParse  v{version}  —  Runtime Parsing Benchmark\n"
-    "Flat JSON object  ·  OneParse (HAPI chain) vs Spirit.X3 vs strlen",
+    "Flat JSON object  ·  OneParse (HAPI chain) vs Spirit.X3 vs lexy vs strlen",
     fontsize=12
 )
 
@@ -129,7 +135,7 @@ fig.suptitle(
 ax1 = fig.add_subplot(gs[0, 0])
 parser_names = [n for n, _ in PARSERS if n != "strlen"]
 x       = list(range(len(DATA_FILES)))
-width   = 0.35
+width   = 0.18
 for i, pname in enumerate(parser_names):
     vals = []
     for fname in DATA_FILES:

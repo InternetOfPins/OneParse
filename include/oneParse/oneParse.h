@@ -8,7 +8,10 @@
 
 #include <cstddef>
 #include <cstring>
+#include <memory>
+#include <new>
 #include <string>
+#include <utility>
 #include <hapi/hapi.h>
 #include <oneParse/wcw.h>
 using hapi::APIOf;
@@ -25,14 +28,61 @@ namespace oneParse {
     return '"' + std::string(s, len < n ? len : n) + (len > n ? "..." : "") + '"';
   }
 
-  // Parse result — value + position + error trace
-  // err: empty on success; innermost failure message first, each outer caller appends
+  // Construction tags — select which union member to initialise
+  struct ok_t  {};
+  struct err_t {};
+  constexpr ok_t  ok_v {};
+  constexpr err_t err_v{};
+
+  // Parse result — Either style: val and err share storage; only the live branch is constructed.
+  // Construct with {ok_v, val, rest} or {err_v, rest, "message"}.
+  // On the success path no std::string is ever built or destroyed.
   template<typename T>
   struct Res {
-    bool        ok;
-    T           val;
-    Src         rest;
-    std::string err;
+    bool ok;
+    Src  rest;
+    union { T val; std::string err; };
+
+    Res(ok_t,  T v,  Src r)              : ok(true),  rest(r) { new (&val) T(std::move(v));            }
+    Res(err_t, Src r, std::string e = {}) : ok(false), rest(r) { new (&err) std::string(std::move(e)); }
+
+    ~Res() { if (ok) val.~T(); else std::destroy_at(&err); }
+
+    Res(const Res& o) : ok(o.ok), rest(o.rest) {
+      if (ok) new (&val) T(o.val);
+      else    new (&err) std::string(o.err);
+    }
+    Res(Res&& o) noexcept : ok(o.ok), rest(o.rest) {
+      if (ok) new (&val) T(std::move(o.val));
+      else    new (&err) std::string(std::move(o.err));
+    }
+    Res& operator=(const Res& o) {
+      if (this == &o) return *this;
+      if (ok == o.ok) {
+        rest = o.rest;
+        if (ok) val = o.val; else err = o.err;
+      } else {
+        if (ok) val.~T(); else std::destroy_at(&err);
+        ok = o.ok; rest = o.rest;
+        if (ok) new (&val) T(o.val);
+        else    new (&err) std::string(o.err);
+      }
+      return *this;
+    }
+    Res& operator=(Res&& o) noexcept {
+      if (this == &o) return *this;
+      if (ok == o.ok) {
+        rest = o.rest;
+        if (ok) val = std::move(o.val); else err = std::move(o.err);
+      } else {
+        if (ok) val.~T(); else std::destroy_at(&err);
+        ok = o.ok; rest = o.rest;
+        if (ok) new (&val) T(std::move(o.val));
+        else    new (&err) std::string(std::move(o.err));
+      }
+      return *this;
+    }
+
     operator bool() const { return ok; }
   };
 
@@ -41,7 +91,7 @@ namespace oneParse {
   struct ParseAPI {
     using Type   = T;
     using Result = Res<T>;
-    static Result run(Src src) { return {true, T{}, src}; }
+    static Result run(Src src) { return {ok_v, T{}, src}; }
   };
 
   // Composition wrapper — mirrors OneData's DataDef pattern
@@ -94,7 +144,7 @@ namespace oneParse {
       static auto run(Src src) -> typename Base::Result {
         static constexpr std::size_t N = std::char_traits<char>::length(S);
         if (!src || std::strncmp(src, S, N) != 0)
-          return {false, {}, src, std::string("expected \"") + S + "\" at " + snip(src)};
+          return {err_v, src, std::string("expected \"") + S + "\" at " + snip(src)};
         auto r = Base::run(src + N);
         if (!r.ok) r.err += "\n  <- Str at " + snip(src);
         return r;
@@ -117,7 +167,7 @@ namespace oneParse {
           else      r.err += "\n  <- Char at " + snip(src);
           return r;
         }
-        return {false, {}, src, std::string("expected '") + C + "' at " + snip(src)};
+        return {err_v, src, std::string("expected '") + C + "' at " + snip(src)};
       }
     };
   };
@@ -135,7 +185,7 @@ namespace oneParse {
           else      r.err += "\n  <- Satisfy at " + snip(src);
           return r;
         }
-        return {false, {}, src, std::string("predicate failed at ") + snip(src)};
+        return {err_v, src, std::string("predicate failed at ") + snip(src)};
       }
     };
   };
@@ -153,7 +203,7 @@ namespace oneParse {
           else      r.err += "\n  <- Range at " + snip(src);
           return r;
         }
-        return {false, {}, src,
+        return {err_v, src,
           std::string("expected ['") + Lo + "'-'" + Hi + "'] at " + snip(src)};
       }
     };
@@ -172,7 +222,7 @@ namespace oneParse {
           else      r.err += "\n  <- Ranges at " + snip(src);
           return r;
         }
-        return {false, {}, src, std::string("ranges mismatch at ") + snip(src)};
+        return {err_v, src, std::string("ranges mismatch at ") + snip(src)};
       }
     };
   };
@@ -191,7 +241,7 @@ namespace oneParse {
           else      r.err += "\n  <- AnyOf at " + snip(src);
           return r;
         }
-        return {false, {}, src, std::string("none matched at ") + snip(src)};
+        return {err_v, src, std::string("none matched at ") + snip(src)};
       }
     };
   };
@@ -206,9 +256,9 @@ namespace oneParse {
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
         if (!src || !*src)
-          return {false, {}, src, std::string("not: unexpected end at ") + snip(src)};
+          return {err_v, src, std::string("not: unexpected end at ") + snip(src)};
         if (Chain<P>::template Part<ParseAPI<char>>::run(src).ok)
-          return {false, {}, src, std::string("not: unexpected match at ") + snip(src)};
+          return {err_v, src, std::string("not: unexpected match at ") + snip(src)};
         auto r = Base::run(src + 1);
         if (r.ok) r.val = *src;
         else      r.err += "\n  <- Not at " + snip(src);
@@ -257,7 +307,7 @@ namespace oneParse {
         Src orig = src;
         auto first = Chain<P>::template Part<ParseAPI<char>>::run(src);
         if (!first.ok) {
-          typename Base::Result r{false, {}, orig,
+          typename Base::Result r{err_v, orig,
             first.err + "\n  <- Some: at least one match required at " + snip(orig)};
           return r;
         }
@@ -319,7 +369,7 @@ namespace oneParse {
       static auto run(Src src) -> typename Base::Result {
         auto probe = Chain<PP...>::template Part<ParseAPI<char>>::run(src);
         if (!probe.ok) {
-          typename Base::Result r{false, {}, src,
+          typename Base::Result r{err_v, src,
             probe.err + "\n  <- Skip at " + snip(src)};
           return r;
         }
@@ -355,7 +405,7 @@ namespace oneParse {
           else      r.err += "\n  <- Or (P2) at " + snip(src);
           return r;
         }
-        typename Base::Result r{false, {}, src,
+        typename Base::Result r{err_v, src,
           "Or: all branches failed at " + snip(src) +
           "\n  P1: " + r1.err +
           "\n  P2: " + r2.err};
@@ -376,7 +426,7 @@ namespace oneParse {
       using T = typename Base::Type;
       static auto run(Src src) -> typename Base::Result {
         if (!src || *src != C)
-          return {false, {}, src};  // empty err — Or discards it if another branch succeeds
+          return {err_v, src};  // empty err — Or discards it if another branch succeeds
         return Chain<P>::template Part<ParseAPI<T>>::run(src);
       }
     };
@@ -392,13 +442,13 @@ namespace oneParse {
       static auto run(Src src) -> typename Base::Result {
         auto r1 = P1::run(src);
         if (!r1.ok) {
-          typename Base::Result r{false, {}, src,
+          typename Base::Result r{err_v, src,
             r1.err + "\n  <- Seq (first) at " + snip(src)};
           return r;
         }
         auto r2 = P2::run(r1.rest);
         if (!r2.ok) {
-          typename Base::Result r{false, {}, src,
+          typename Base::Result r{err_v, src,
             r2.err + "\n  <- Seq (second) at " + snip(r1.rest)};
           return r;
         }
@@ -420,7 +470,7 @@ namespace oneParse {
       static auto run(Src src) -> typename Base::Result {
         auto probe = Chain<PP...>::template Part<ParseAPI<T_in>>::run(src);
         if (!probe.ok) {
-          typename Base::Result r{false, {}, src,
+          typename Base::Result r{err_v, src,
             probe.err + "\n  <- To at " + snip(src)};
           return r;
         }
@@ -442,7 +492,7 @@ namespace oneParse {
       static auto run(Src src) -> typename Base::Result {
         auto probe = P::run(src);
         if (!probe.ok) {
-          typename Base::Result r{false, {}, src,
+          typename Base::Result r{err_v, src,
             probe.err + "\n  <- As at " + snip(src)};
           return r;
         }
@@ -488,7 +538,7 @@ namespace oneParse {
         Src orig = src;
         auto first = P::run(src);
         if (!first.ok) {
-          typename Base::Result r{false, {}, orig,
+          typename Base::Result r{err_v, orig,
             first.err + "\n  <- SomeN: at least one match required at " + snip(orig)};
           return r;
         }
@@ -499,7 +549,7 @@ namespace oneParse {
           auto probe = P::run(src);
           if (!probe.ok) break;
           if (!arr.push(probe.val)) {
-            typename Base::Result r{false, {}, orig,
+            typename Base::Result r{err_v, orig,
               "SomeN: overflow (>" + std::to_string(N) + ") at " + snip(src)};
             return r;
           }
@@ -532,7 +582,7 @@ namespace oneParse {
           auto probe = P::run(src);
           if (!probe.ok) break;
           if (!arr.push(probe.val)) {
-            typename Base::Result r{false, {}, orig,
+            typename Base::Result r{err_v, orig,
               "ManyN: overflow (>" + std::to_string(N) + ") at " + snip(src)};
             return r;
           }
@@ -560,7 +610,7 @@ namespace oneParse {
       static auto run(Src src) -> typename Base::Result {
         auto probe = F(src);
         if (!probe.ok) {
-          typename Base::Result r{false, {}, src,
+          typename Base::Result r{err_v, src,
             probe.err + "\n  <- Defer at " + snip(src)};
           return r;
         }
@@ -585,7 +635,7 @@ namespace oneParse {
           else      r.err += "\n  <- Any at " + snip(src);
           return r;
         }
-        return {false, {}, src, std::string("unexpected end of input")};
+        return {err_v, src, std::string("unexpected end of input")};
       }
     };
   };
@@ -602,7 +652,7 @@ namespace oneParse {
           if (!r.ok) r.err += "\n  <- Eof";
           return r;
         }
-        return {false, {}, src, std::string("expected end of input at ") + snip(src)};
+        return {err_v, src, std::string("expected end of input at ") + snip(src)};
       }
     };
   };
@@ -620,11 +670,11 @@ namespace oneParse {
         while (true) {
           if (Chain<End>::template Part<ParseAPI<char>>::run(cur).ok) break;
           if (!cur || !*cur)
-            return {false, {}, orig,
+            return {err_v, orig,
               std::string("ManyTill: end condition never matched, reached end at ") + snip(orig)};
           auto probe = Chain<P>::template Part<ParseAPI<char>>::run(cur);
           if (!probe.ok) {
-            typename Base::Result r{false, {}, orig,
+            typename Base::Result r{err_v, orig,
               probe.err + "\n  <- ManyTill at " + snip(orig)};
             return r;
           }
@@ -648,19 +698,19 @@ namespace oneParse {
         Src orig = src;
         auto open = Chain<Open>::template Part<ParseAPI<char>>::run(src);
         if (!open.ok) {
-          typename Base::Result r{false, {}, orig,
+          typename Base::Result r{err_v, orig,
             open.err + "\n  <- Between (open) at " + snip(orig)};
           return r;
         }
         auto inner = P::run(open.rest);
         if (!inner.ok) {
-          typename Base::Result r{false, {}, orig,
+          typename Base::Result r{err_v, orig,
             inner.err + "\n  <- Between (inner) at " + snip(open.rest)};
           return r;
         }
         auto close = Chain<Close>::template Part<ParseAPI<char>>::run(inner.rest);
         if (!close.ok) {
-          typename Base::Result r{false, {}, orig,
+          typename Base::Result r{err_v, orig,
             close.err + "\n  <- Between (close) at " + snip(inner.rest)};
           return r;
         }
@@ -698,7 +748,7 @@ namespace oneParse {
           auto item = P::run(sep.rest);
           if (!item.ok) break;
           if (!arr.push(item.val))
-            return {false, {}, orig, "SepBy: overflow (>" + std::to_string(N) + ") at " + snip(src)};
+            return {err_v, orig, "SepBy: overflow (>" + std::to_string(N) + ") at " + snip(src)};
           src = item.rest;
         }
         auto r = Base::run(src);
@@ -725,13 +775,13 @@ namespace oneParse {
         Src orig = src;
         auto first = P::run(src);
         if (!first.ok) {
-          typename Base::Result r{false, {}, orig,
+          typename Base::Result r{err_v, orig,
             first.err + "\n  <- SepBy1: at least one item required at " + snip(orig)};
           return r;
         }
         Arr<ElemT, N> arr;    // len=0 from DMI; data slots filled on push only
         if (!arr.push(first.val))
-          return {false, {}, orig, "SepBy1: overflow (>" + std::to_string(N) + ") at " + snip(src)};
+          return {err_v, orig, "SepBy1: overflow (>" + std::to_string(N) + ") at " + snip(src)};
         src = first.rest;
         while (src) {
           auto sep = Chain<Sep>::template Part<ParseAPI<char>>::run(src);
@@ -739,7 +789,7 @@ namespace oneParse {
           auto item = P::run(sep.rest);
           if (!item.ok) break;
           if (!arr.push(item.val))
-            return {false, {}, orig, "SepBy1: overflow (>" + std::to_string(N) + ") at " + snip(src)};
+            return {err_v, orig, "SepBy1: overflow (>" + std::to_string(N) + ") at " + snip(src)};
           src = item.rest;
         }
         auto r = Base::run(src);
@@ -764,12 +814,12 @@ namespace oneParse {
       static auto run(Src src) -> typename Base::Result {
         auto probe = P::run(src);
         if (!probe.ok) {
-          typename Base::Result r{false, {}, src,
+          typename Base::Result r{err_v, src,
             probe.err + "\n  <- Verify at " + snip(src)};
           return r;
         }
         if (!F(probe.val))
-          return {false, {}, src, std::string("Verify: predicate rejected value at ") + snip(src)};
+          return {err_v, src, std::string("Verify: predicate rejected value at ") + snip(src)};
         auto r = Base::run(probe.rest);
         if (r.ok) r.val = probe.val;
         else      r.err += "\n  <- Verify at " + snip(src);
