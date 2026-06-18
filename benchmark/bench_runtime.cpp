@@ -125,8 +125,7 @@ namespace x3 = boost::spirit::x3;
 static const char PARSER_NAME[] = "spirit.x3";
 
 static void parse(const char* s) {
-    std::string in(s);
-    auto it = in.cbegin();
+    const char* end = s + std::strlen(s);
 
     // key: quoted string → std::string content (quotes stripped)
     auto const quoted_key = x3::lexeme[
@@ -134,9 +133,7 @@ static void parse(const char* s) {
     ];
 
     // value: quoted or unquoted — scan and discard
-    // quoted_val attribute: std::string (content between quotes)
     auto const quoted_val = x3::lit('"') >> *(x3::char_ - '"') >> x3::lit('"');
-    // word_val: null/true/false/numbers — any char not a delimiter
     auto const word_val   = x3::lexeme[+(x3::char_ - x3::char_(",} \t\n\r"))];
     auto const value      = x3::omit[quoted_val | word_val];
 
@@ -145,7 +142,7 @@ static void parse(const char* s) {
 
     // object: { member (, member)* }
     std::vector<std::string> keys;
-    x3::phrase_parse(it, in.cend(),
+    x3::phrase_parse(s, end,
         x3::lit('{') >> -(member % x3::lit(',')) >> x3::lit('}'),
         x3::space, keys);
 }
