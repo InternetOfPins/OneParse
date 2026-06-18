@@ -14,6 +14,7 @@
 
 #include <iostream>
 #include <string>
+#include <string_view>
 using namespace std;
 
 #include <oneParse/oneParse.h>
@@ -23,12 +24,12 @@ using namespace oneParse;
 
 struct Val {
   enum class Kind : uint8_t { None, Null, Bool, Int, Str } kind = Kind::None;
-  string str{};
+  string_view str{};  // view into source buffer — no heap allocation
   int    i = 0;
   bool   b = false;
 };
 
-// --- Local component: collect chars until '"' into std::string ----------------
+// --- Local component: scan chars until '"', return view into source -----------
 
 struct QuotedBody {
   template<typename O>
@@ -36,16 +37,16 @@ struct QuotedBody {
     using Base = O;
     using Base::Base;
     static auto run(Src src) -> typename Base::Result {
-      string s;
-      while (src && *src && *src != '"') s += *src++;
+      const char* start = src;
+      while (src && *src && *src != '"') ++src;
       auto r = Base::run(src);
-      if (r.ok) r.val = s;
+      if (r.ok) r.val = string_view(start, src - start);
       return r;
     }
   };
 };
 
-using QuotedP = ParseDef<string, QuotedBody>;
+using QuotedP = ParseDef<string_view, QuotedBody>;
 
 // --- Helpers ------------------------------------------------------------------
 
@@ -58,7 +59,7 @@ static int digitsToInt(Arr<char,10> a) {
 static Val asNull(char)    { Val v; v.kind = Val::Kind::Null;              return v; }
 static Val asTrue(char)    { Val v; v.kind = Val::Kind::Bool; v.b = true;  return v; }
 static Val asFalse(char)   { Val v; v.kind = Val::Kind::Bool; v.b = false; return v; }
-static Val asStr(string s) { Val v; v.kind = Val::Kind::Str;  v.str = s;   return v; }
+static Val asStr(string_view s) { Val v; v.kind = Val::Kind::Str; v.str = s; return v; }
 
 static Val signedToVal(Pair<char,Arr<char,10>> p) {
   Val v;
@@ -75,17 +76,17 @@ constexpr const char kFalse[] = "false";
 
 // --- Key parser ---------------------------------------------------------------
 
-using KeyP = ParseDef<string,
+using KeyP = ParseDef<string_view,
     Skip<Many<Space>>,
     Between<Char<'"'>, QuotedP, Char<'"'>>>;
 
 // --- Value components (each lifts its result to Val) --------------------------
 
-using NullComp  = To<char, asNull,  Str<kNull>>;
-using TrueComp  = To<char, asTrue,  Str<kTrue>>;
-using FalseComp = To<char, asFalse, Str<kFalse>>;
+using NullComp  = To<char,        asNull,  Str<kNull>>;
+using TrueComp  = To<char,        asTrue,  Str<kTrue>>;
+using FalseComp = To<char,        asFalse, Str<kFalse>>;
 
-using StrValComp = To<string, asStr,
+using StrValComp = To<string_view, asStr,
     Between<Char<'"'>, QuotedP, Char<'"'>>>;
 
 using MagP = ParseDef<Arr<char,10>, SomeN<ParseDef<char,Digit>,10>>;
@@ -103,17 +104,17 @@ using ValAfterColonP = ParseDef<Val,
     Skip<Many<Space>, Char<':'>, Many<Space>>,
     AnyValComp>;
 
-using MemberP = ParseDef<Pair<string,Val>, Seq<KeyP, ValAfterColonP>>;
+using MemberP = ParseDef<Pair<string_view,Val>, Seq<KeyP, ValAfterColonP>>;
 
 // --- Object -------------------------------------------------------------------
 
 using CommaP    = Skip<Many<Space>, Char<','>, Many<Space>>;
 using CloseObjP = Skip<Many<Space>, Char<'}'>>;
 
-using MembersP = ParseDef<Arr<Pair<string,Val>, 8>,
+using MembersP = ParseDef<Arr<Pair<string_view,Val>, 8>,
     SepBy<MemberP, CommaP, 8>>;
 
-using ObjectP = ParseDef<Arr<Pair<string,Val>, 8>,
+using ObjectP = ParseDef<Arr<Pair<string_view,Val>, 8>,
     Skip<Many<Space>>,
     Between<Char<'{'>, MembersP, CloseObjP>>;
 

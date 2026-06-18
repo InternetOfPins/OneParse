@@ -16,6 +16,10 @@ constexpr const char key_str[] = {
     '"', 'k', char('0' + (I / 10)), char('0' + (I % 10)), '"', '\0'
 };
 
+// Guard: empty translation unit when compiled without a test flag (e.g. by a library scanner)
+#if defined(TEST_PARSE_BASELINE) || defined(TEST_PARSE_ONEPARSE_JSON) \
+ || defined(TEST_PARSE_SPIRIT_JSON) || defined(TEST_PARSE_HANA_JSON)
+
 // ─── Baseline — empty grammar, measures compiler startup cost ─────────────────
 
 #if defined(TEST_PARSE_BASELINE)
@@ -94,3 +98,5 @@ void run() {
 #endif
 
 int main() { run(); return 0; }
+
+#endif // test flag defined

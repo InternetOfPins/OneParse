@@ -23,5 +23,8 @@
     "HAPI": "*"
   },
   "frameworks": "*",
-  "platforms": "*"
+  "platforms": "*",
+  "export": {
+    "exclude": ["benchmark", "examples"]
+  }
 }
