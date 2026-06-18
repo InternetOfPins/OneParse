@@ -75,10 +75,10 @@ struct NCNameCollect {
     using Base = O;
     using Base::Base;
     static auto run(Src src) -> typename Base::Result {
-      if (!src || !isNameStart(*src)) return {false,{},src};
+      if (!src || !isNameStart(*src)) return {err_v, src};
       Arr<char,32> arr{};
       while (src && *src && isNameChar(*src)) {
-        if (!arr.push(*src)) return {false,{},src};
+        if (!arr.push(*src)) return {err_v, src};
         ++src;
       }
       auto r = Base::run(src);
@@ -163,20 +163,20 @@ struct PrimaryCollect {
           Src ws = skipWs(inner.rest);
           if (ws && *ws == ')') {
             Choice* c = allocGroup();
-            if (!c) return {false,{},src};
+            if (!c) return {err_v, src};
             *c = inner.val;
             p.kind = Primary::Kind::Group; p.group = c;
             auto res = Base::run(ws + 1); if(res.ok) res.val=p; return res;
           }
         }
-        return {false,{},src};
+        return {err_v, src};
       }
 
       { auto r = NCNameP::run(src);
         if (r.ok) { p.kind=Primary::Kind::Name; p.text=r.val;
                     auto res=Base::run(r.rest); if(res.ok) res.val=p; return res; } }
 
-      return {false,{},src};
+      return {err_v, src};
     }
   };
 };
