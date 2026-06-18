@@ -92,12 +92,11 @@ namespace oneParse {
       using Base = O;
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
-        Src orig = src;
-        for (const char* s = S; *s; ++s, ++src)
-          if (!src || *src != *s)
-            return {false, {}, orig, std::string("expected \"") + S + "\" at " + snip(orig)};
-        auto r = Base::run(src);
-        if (!r.ok) r.err += "\n  <- Str at " + snip(orig);
+        static constexpr std::size_t N = std::char_traits<char>::length(S);
+        if (!src || std::strncmp(src, S, N) != 0)
+          return {false, {}, src, std::string("expected \"") + S + "\" at " + snip(src)};
+        auto r = Base::run(src + N);
+        if (!r.ok) r.err += "\n  <- Str at " + snip(src);
         return r;
       }
     };
