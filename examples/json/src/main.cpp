@@ -132,7 +132,7 @@ static void printVal(const Val& v) {
 static void runObj(const char* input) {
   cout << input << "\n";
   auto r = ObjectP::run(input);
-  if (!r.ok) { cout << "  -> parse error\n\n"; return; }
+  if (!r.ok) { cout << "  -> error: " << r.err << "\n\n"; return; }
   cout << "  -> {\n";
   for (size_t i = 0; i < r.val.len; i++) {
     cout << "       \"" << r.val.data[i].fst << "\": ";

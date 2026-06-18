@@ -7,6 +7,8 @@
 #pragma once
 
 #include <cstddef>
+#include <cstring>
+#include <string>
 #include <hapi/hapi.h>
 #include <oneParse/wcw.h>
 using hapi::APIOf;
@@ -16,17 +18,25 @@ namespace oneParse {
 
   using Src = const char*;
 
-  // Parse result — value type, no heap, fits in registers
+  // Short snippet of remaining input for error messages
+  inline std::string snip(Src s, size_t n = 16) {
+    if (!s || !*s) return "<end>";
+    size_t len = std::strlen(s);
+    return '"' + std::string(s, len < n ? len : n) + (len > n ? "..." : "") + '"';
+  }
+
+  // Parse result — value + position + error trace
+  // err: empty on success; innermost failure message first, each outer caller appends
   template<typename T>
   struct Res {
-    bool ok;
-    T    val;
-    Src  rest;
+    bool        ok;
+    T           val;
+    Src         rest;
+    std::string err;
     operator bool() const { return ok; }
   };
 
   // Base parser API — end of chain, all components matched
-  // T is the result type surfaced to the caller
   template<typename T>
   struct ParseAPI {
     using Type   = T;
@@ -35,10 +45,6 @@ namespace oneParse {
   };
 
   // Composition wrapper — mirrors OneData's DataDef pattern
-  // Exposes Chain-style Build/App/Ins so ParseDef participates in HAPI's meta-world:
-  //   SomeParser::Ins<NewComp>   — append component at end
-  //   SomeParser::App<NewComp>   — prepend component at front
-  //   SomeParser::Build<W>       — unpack OO... into W<OO...>
   template<typename T, typename... OO>
   struct ParseDef : APIOf<ParseAPI<T>, OO...> {
     using Base = APIOf<ParseAPI<T>, OO...>;
@@ -68,7 +74,7 @@ namespace oneParse {
 
   // --- Zero-width tag ---------------------------------------------------------
   // Components that can succeed without consuming input inherit from this.
-  // Many<P> and Some<P> declare rules() that reject ZeroWidth inner components.
+  // Many<P> and Some<P> static_assert against ZeroWidth inner components.
   struct ZeroWidthTag {};
 
   // --- Value-leaf tag ---------------------------------------------------------
@@ -79,8 +85,6 @@ namespace oneParse {
 
   // --- String literal component ----------------------------------------------
 
-  // Match the null-terminated string S exactly; on failure does not consume input
-  // S must be a constexpr const char[] at namespace scope (C++17 NTTP requirement)
   template<const char* S>
   struct Str {
     template<typename O>
@@ -90,15 +94,17 @@ namespace oneParse {
       static auto run(Src src) -> typename Base::Result {
         Src orig = src;
         for (const char* s = S; *s; ++s, ++src)
-          if (!src || *src != *s) return {false, {}, orig};
-        return Base::run(src);
+          if (!src || *src != *s)
+            return {false, {}, orig, std::string("expected \"") + S + "\" at " + snip(orig)};
+        auto r = Base::run(src);
+        if (!r.ok) r.err += "\n  <- Str at " + snip(orig);
+        return r;
       }
     };
   };
 
   // --- Leaf components -------------------------------------------------------
 
-  // Match one specific character
   template<char C>
   struct Char : ValueLeafTag {
     template<typename O>
@@ -107,16 +113,16 @@ namespace oneParse {
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
         if (src && *src == C) {
-          auto r = Base::run(src + 1);   // consume, continue chain
+          auto r = Base::run(src + 1);
           if (r.ok) r.val = C;
+          else      r.err += "\n  <- Char at " + snip(src);
           return r;
         }
-        return {false, {}, src};
+        return {false, {}, src, std::string("expected '") + C + "' at " + snip(src)};
       }
     };
   };
 
-  // Match any character satisfying a predicate
   template<bool(*F)(char)>
   struct Satisfy : ValueLeafTag {
     template<typename O>
@@ -125,16 +131,16 @@ namespace oneParse {
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
         if (src && F(*src)) {
-          auto r = Base::run(src + 1);   // consume, continue chain
+          auto r = Base::run(src + 1);
           if (r.ok) r.val = *src;
+          else      r.err += "\n  <- Satisfy at " + snip(src);
           return r;
         }
-        return {false, {}, src};
+        return {false, {}, src, std::string("predicate failed at ") + snip(src)};
       }
     };
   };
 
-  // Match a character in the inclusive range [Lo, Hi] — delegates to Quick::Range
   template<char Lo, char Hi>
   struct Range : ValueLeafTag {
     template<typename O>
@@ -145,14 +151,15 @@ namespace oneParse {
         if (src && Quick::Range<char,Lo,Hi>::chk(*src)) {
           auto r = Base::run(src + 1);
           if (r.ok) r.val = *src;
+          else      r.err += "\n  <- Range at " + snip(src);
           return r;
         }
-        return {false, {}, src};
+        return {false, {}, src,
+          std::string("expected ['") + Lo + "'-'" + Hi + "'] at " + snip(src)};
       }
     };
   };
 
-  // Match any character accepted by any of the Quick::Range/Ranges-compatible types
   template<typename... RR>
   struct Ranges : ValueLeafTag {
     template<typename O>
@@ -163,14 +170,14 @@ namespace oneParse {
         if (src && Quick::Ranges<RR...>::chk(*src)) {
           auto r = Base::run(src + 1);
           if (r.ok) r.val = *src;
+          else      r.err += "\n  <- Ranges at " + snip(src);
           return r;
         }
-        return {false, {}, src};
+        return {false, {}, src, std::string("ranges mismatch at ") + snip(src)};
       }
     };
   };
 
-  // Match any character in the compile-time character set
   template<char... Cs>
   struct AnyOf : ValueLeafTag {
     static constexpr bool contains(char c) { return ((c == Cs) || ...); }
@@ -182,16 +189,16 @@ namespace oneParse {
         if (src && contains(*src)) {
           auto r = Base::run(src + 1);
           if (r.ok) r.val = *src;
+          else      r.err += "\n  <- AnyOf at " + snip(src);
           return r;
         }
-        return {false, {}, src};
+        return {false, {}, src, std::string("none matched at ") + snip(src)};
       }
     };
   };
 
   // --- Negation --------------------------------------------------------------
 
-  // Match any single character where P does NOT match
   template<typename P>
   struct Not : ValueLeafTag {
     template<typename O>
@@ -199,23 +206,24 @@ namespace oneParse {
       using Base = O;
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
-        if (!src || !*src) return {false, {}, src};
-        if (Chain<P>::template Part<ParseAPI<char>>::run(src).ok) return {false, {}, src};
+        if (!src || !*src)
+          return {false, {}, src, std::string("not: unexpected end at ") + snip(src)};
+        if (Chain<P>::template Part<ParseAPI<char>>::run(src).ok)
+          return {false, {}, src, std::string("not: unexpected match at ") + snip(src)};
         auto r = Base::run(src + 1);
         if (r.ok) r.val = *src;
+        else      r.err += "\n  <- Not at " + snip(src);
         return r;
       }
     };
   };
 
-  // Match any char NOT in the compile-time character set
   template<char... Cs>
   using NoneOf = Not<AnyOf<Cs...>>;
 
   // --- Meta parsers ----------------------------------------------------------
 
-  // Match zero or one occurrence of component P; always succeeds
-  // On match: advances input and sets r.val; on no match: leaves input and val untouched
+  // Match zero or one occurrence of P; always succeeds
   template<typename P>
   struct Opt : ZeroWidthTag {
     template<typename O>
@@ -228,15 +236,17 @@ namespace oneParse {
         if (probe.ok) {
           auto r = Base::run(probe.rest);
           if (r.ok) r.val = probe.val;
+          else      r.err += "\n  <- Opt (matched) at " + snip(src);
           return r;
         }
-        return Base::run(src);
+        auto r = Base::run(src);
+        if (!r.ok) r.err += "\n  <- Opt (unmatched) at " + snip(src);
+        return r;
       }
     };
   };
 
-  // Match one or more occurrences of component P; fails if zero matches
-  // r.val is left for the chain to fill — use r.rest vs original src for the span
+  // Match one or more occurrences of P; fails if zero matches
   template<typename P>
   struct Some {
     static_assert(!std::is_base_of_v<ZeroWidthTag, P>, "Some<P>: P is zero-width — infinite loop");
@@ -245,22 +255,27 @@ namespace oneParse {
       using Base = O;
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
+        Src orig = src;
         auto first = Chain<P>::template Part<ParseAPI<char>>::run(src);
-        if (!first.ok) return {false, {}, src};
+        if (!first.ok) {
+          typename Base::Result r{false, {}, orig,
+            first.err + "\n  <- Some: at least one match required at " + snip(orig)};
+          return r;
+        }
         src = first.rest;
         while (src && *src) {
           auto probe = Chain<P>::template Part<ParseAPI<char>>::run(src);
           if (!probe.ok) break;
           src = probe.rest;
         }
-        return Base::run(src);
+        auto r = Base::run(src);
+        if (!r.ok) r.err += "\n  <- Some at " + snip(orig);
+        return r;
       }
     };
   };
 
-  // Match zero or more occurrences of component P (Kleene star); always succeeds
-  // r.val is left for the chain to fill — use r.rest vs original src for the span
-  // For alternatives use Many<Or<P1,P2>>
+  // Match zero or more occurrences of P (star / *); always succeeds
   template<typename P>
   struct Many : ZeroWidthTag {
     static_assert(!std::is_base_of_v<ZeroWidthTag, P>, "Many<P>: P is zero-width — infinite loop");
@@ -269,18 +284,20 @@ namespace oneParse {
       using Base = O;
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
+        Src orig = src;
         while (src && *src) {
           auto probe = Chain<P>::template Part<ParseAPI<char>>::run(src);
           if (!probe.ok) break;
           src = probe.rest;
         }
-        return Base::run(src);
+        auto r = Base::run(src);
+        if (!r.ok) r.err += "\n  <- Many at " + snip(orig);
+        return r;
       }
     };
   };
 
-
-  // Advance past component chain PP... without contributing a value to the chain
+  // Advance past component chain PP... without contributing a value
   template<typename... PP>
   struct Skip {
     template<typename O>
@@ -289,14 +306,19 @@ namespace oneParse {
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
         auto probe = Chain<PP...>::template Part<ParseAPI<char>>::run(src);
-        if (!probe.ok) return {false, {}, src};
-        return Base::run(probe.rest);
+        if (!probe.ok) {
+          typename Base::Result r{false, {}, src,
+            probe.err + "\n  <- Skip at " + snip(src)};
+          return r;
+        }
+        auto r = Base::run(probe.rest);
+        if (!r.ok) r.err += "\n  <- Skip at " + snip(src);
+        return r;
       }
     };
   };
 
-  // Try component P1; on failure try component P2; both share the chain's T
-  // Inherits ZeroWidthTag if either branch is zero-width — propagates recursively
+  // Try P1; on failure try P2; both share the chain's T
   template<typename P1, typename P2>
   struct Or : std::conditional_t<
       std::is_base_of_v<ZeroWidthTag,P1> || std::is_base_of_v<ZeroWidthTag,P2>,
@@ -308,15 +330,29 @@ namespace oneParse {
       using T = typename Base::Type;
       static auto run(Src src) -> typename Base::Result {
         auto r1 = Chain<P1>::template Part<ParseAPI<T>>::run(src);
-        if (r1.ok) { auto r = Base::run(r1.rest); if (r.ok) r.val = r1.val; return r; }
+        if (r1.ok) {
+          auto r = Base::run(r1.rest);
+          if (r.ok) r.val = r1.val;
+          else      r.err += "\n  <- Or (P1) at " + snip(src);
+          return r;
+        }
         auto r2 = Chain<P2>::template Part<ParseAPI<T>>::run(src);
-        if (r2.ok) { auto r = Base::run(r2.rest); if (r.ok) r.val = r2.val; return r; }
-        return {false, {}, src};
+        if (r2.ok) {
+          auto r = Base::run(r2.rest);
+          if (r.ok) r.val = r2.val;
+          else      r.err += "\n  <- Or (P2) at " + snip(src);
+          return r;
+        }
+        typename Base::Result r{false, {}, src,
+          "Or: all branches failed at " + snip(src) +
+          "\n  P1: " + r1.err +
+          "\n  P2: " + r2.err};
+        return r;
       }
     };
   };
 
-  // Sequential composition of two complete parsers yielding Pair<P1::Type, P2::Type>
+  // Sequential composition of two complete parsers yielding Pair<T1,T2>
   template<typename P1, typename P2>
   struct Seq {
     template<typename O>
@@ -325,17 +361,26 @@ namespace oneParse {
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
         auto r1 = P1::run(src);
-        if (!r1.ok) return {false, {}, src};
+        if (!r1.ok) {
+          typename Base::Result r{false, {}, src,
+            r1.err + "\n  <- Seq (first) at " + snip(src)};
+          return r;
+        }
         auto r2 = P2::run(r1.rest);
-        if (!r2.ok) return {false, {}, src};
+        if (!r2.ok) {
+          typename Base::Result r{false, {}, src,
+            r2.err + "\n  <- Seq (second) at " + snip(r1.rest)};
+          return r;
+        }
         auto r = Base::run(r2.rest);
         if (r.ok) r.val = {r1.val, r2.val};
+        else      r.err += "\n  <- Seq at " + snip(src);
         return r;
       }
     };
   };
 
-  // Parse component chain PP... as T_in, apply F(val) to produce the outer T
+  // Parse chain PP... as T_in, apply F(val) to produce the outer T
   template<typename T_in, auto F, typename... PP>
   struct To {
     template<typename O>
@@ -344,16 +389,20 @@ namespace oneParse {
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
         auto probe = Chain<PP...>::template Part<ParseAPI<T_in>>::run(src);
-        if (!probe.ok) return {false, {}, src};
+        if (!probe.ok) {
+          typename Base::Result r{false, {}, src,
+            probe.err + "\n  <- To at " + snip(src)};
+          return r;
+        }
         auto r = Base::run(probe.rest);
         if (r.ok) r.val = F(probe.val);
+        else      r.err += "\n  <- To at " + snip(src);
         return r;
       }
     };
   };
 
-  // Run complete parser P; construct T_out{P::Type} to produce the outer T
-  // Type-directed variant of To — no explicit transform; T_out must be constructible from P::Type
+  // Run complete parser P; construct T_out{P::Type}
   template<typename T_out, typename P>
   struct As {
     template<typename O>
@@ -362,9 +411,14 @@ namespace oneParse {
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
         auto probe = P::run(src);
-        if (!probe.ok) return {false, {}, src};
+        if (!probe.ok) {
+          typename Base::Result r{false, {}, src,
+            probe.err + "\n  <- As at " + snip(src)};
+          return r;
+        }
         auto r = Base::run(probe.rest);
         if (r.ok) r.val = T_out{probe.val};
+        else      r.err += "\n  <- As at " + snip(src);
         return r;
       }
     };
@@ -378,18 +432,21 @@ namespace oneParse {
       using Base = O;
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
+        Src orig = src;
         while (src && *src) {
           auto probe = P::run(src);
           if (!probe.ok) break;
           F(probe.val);
           src = probe.rest;
         }
-        return Base::run(src);
+        auto r = Base::run(src);
+        if (!r.ok) r.err += "\n  <- ManyFn at " + snip(orig);
+        return r;
       }
     };
   };
 
-  // Collect 1..N matches of complete parser P into Arr<P::Type, N>; fails if zero or overflow
+  // Collect 1..N matches of complete parser P into Arr<P::Type, N>
   template<typename P, size_t N>
   struct SomeN {
     using ElemT = typename P::Type;
@@ -398,25 +455,35 @@ namespace oneParse {
       using Base = O;
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
+        Src orig = src;
         auto first = P::run(src);
-        if (!first.ok) return {false, {}, src};
+        if (!first.ok) {
+          typename Base::Result r{false, {}, orig,
+            first.err + "\n  <- SomeN: at least one match required at " + snip(orig)};
+          return r;
+        }
         Arr<ElemT, N> arr{};
         arr.push(first.val);
         src = first.rest;
         while (src && *src) {
           auto probe = P::run(src);
           if (!probe.ok) break;
-          if (!arr.push(probe.val)) return {false, {}, src};
+          if (!arr.push(probe.val)) {
+            typename Base::Result r{false, {}, orig,
+              "SomeN: overflow (>" + std::to_string(N) + ") at " + snip(src)};
+            return r;
+          }
           src = probe.rest;
         }
         auto r = Base::run(src);
         if (r.ok) r.val = arr;
+        else      r.err += "\n  <- SomeN at " + snip(orig);
         return r;
       }
     };
   };
 
-  // Collect up to N matches of complete parser P into Arr<P::Type, N>; fails on overflow
+  // Collect up to N matches of complete parser P into Arr<P::Type, N>
   template<typename P, size_t N>
   struct ManyN {
     using ElemT = typename P::Type;
@@ -425,22 +492,27 @@ namespace oneParse {
       using Base = O;
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
+        Src orig = src;
         Arr<ElemT, N> arr{};
         while (src && *src) {
           auto probe = P::run(src);
           if (!probe.ok) break;
-          if (!arr.push(probe.val)) return {false, {}, src};
+          if (!arr.push(probe.val)) {
+            typename Base::Result r{false, {}, orig,
+              "ManyN: overflow (>" + std::to_string(N) + ") at " + snip(src)};
+            return r;
+          }
           src = probe.rest;
         }
         auto r = Base::run(src);
         if (r.ok) r.val = arr;
+        else      r.err += "\n  <- ManyN at " + snip(orig);
         return r;
       }
     };
   };
 
   // Call F(src) at runtime, breaking template recursion for self-referential parsers
-  // F must be declared before this template is instantiated (forward declaration is enough)
   template<typename T, auto F>
   struct Defer {
     template<typename O>
@@ -449,9 +521,14 @@ namespace oneParse {
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
         auto probe = F(src);
-        if (!probe.ok) return {false, {}, src};
+        if (!probe.ok) {
+          typename Base::Result r{false, {}, src,
+            probe.err + "\n  <- Defer at " + snip(src)};
+          return r;
+        }
         auto r = Base::run(probe.rest);
         if (r.ok) r.val = probe.val;
+        else      r.err += "\n  <- Defer at " + snip(src);
         return r;
       }
     };
@@ -467,9 +544,10 @@ namespace oneParse {
         if (src && *src) {
           auto r = Base::run(src + 1);
           if (r.ok) r.val = *src;
+          else      r.err += "\n  <- Any at " + snip(src);
           return r;
         }
-        return {false, {}, src};
+        return {false, {}, src, std::string("unexpected end of input")};
       }
     };
   };
@@ -481,16 +559,17 @@ namespace oneParse {
       using Base = O;
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
-        if (!src || !*src) return Base::run(src);
-        return {false, {}, src};
+        if (!src || !*src) {
+          auto r = Base::run(src);
+          if (!r.ok) r.err += "\n  <- Eof";
+          return r;
+        }
+        return {false, {}, src, std::string("expected end of input at ") + snip(src)};
       }
     };
   };
 
-
-  // Advance past component P zero or more times, stopping when End matches
-  // End is checked before P on each step; does not consume End
-  // Fails if End never matches before the input is exhausted
+  // Advance past P zero or more times, stopping when End matches; does not consume End
   template<typename P, typename End>
   struct ManyTill {
     template<typename O>
@@ -498,20 +577,29 @@ namespace oneParse {
       using Base = O;
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
+        Src orig = src;
         Src cur = src;
         while (true) {
           if (Chain<End>::template Part<ParseAPI<char>>::run(cur).ok) break;
-          if (!cur || !*cur) return {false, {}, src};
+          if (!cur || !*cur)
+            return {false, {}, orig,
+              std::string("ManyTill: end condition never matched, reached end at ") + snip(orig)};
           auto probe = Chain<P>::template Part<ParseAPI<char>>::run(cur);
-          if (!probe.ok) return {false, {}, src};
+          if (!probe.ok) {
+            typename Base::Result r{false, {}, orig,
+              probe.err + "\n  <- ManyTill at " + snip(orig)};
+            return r;
+          }
           cur = probe.rest;
         }
-        return Base::run(cur);
+        auto r = Base::run(cur);
+        if (!r.ok) r.err += "\n  <- ManyTill at " + snip(orig);
+        return r;
       }
     };
   };
 
-  // Skip Open component, run complete parser P, skip Close component; yield P's result
+  // Skip Open, run complete parser P, skip Close; yield P's result
   template<typename Open, typename P, typename Close>
   struct Between {
     template<typename O>
@@ -521,20 +609,32 @@ namespace oneParse {
       static auto run(Src src) -> typename Base::Result {
         Src orig = src;
         auto open = Chain<Open>::template Part<ParseAPI<char>>::run(src);
-        if (!open.ok) return {false, {}, orig};
+        if (!open.ok) {
+          typename Base::Result r{false, {}, orig,
+            open.err + "\n  <- Between (open) at " + snip(orig)};
+          return r;
+        }
         auto inner = P::run(open.rest);
-        if (!inner.ok) return {false, {}, orig};
+        if (!inner.ok) {
+          typename Base::Result r{false, {}, orig,
+            inner.err + "\n  <- Between (inner) at " + snip(open.rest)};
+          return r;
+        }
         auto close = Chain<Close>::template Part<ParseAPI<char>>::run(inner.rest);
-        if (!close.ok) return {false, {}, orig};
+        if (!close.ok) {
+          typename Base::Result r{false, {}, orig,
+            close.err + "\n  <- Between (close) at " + snip(inner.rest)};
+          return r;
+        }
         auto r = Base::run(close.rest);
         if (r.ok) r.val = inner.val;
+        else      r.err += "\n  <- Between at " + snip(orig);
         return r;
       }
     };
   };
 
-  // Parse complete parser P separated by component Sep; collect up to N items; zero or more
-  // Backtracks if item fails after a matched separator, stops collecting (does not fail)
+  // Parse complete parser P separated by Sep; collect up to N items; zero or more
   template<typename P, typename Sep, size_t N>
   struct SepBy {
     using ElemT = typename P::Type;
@@ -543,25 +643,30 @@ namespace oneParse {
       using Base = O;
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
+        Src orig = src;
         Arr<ElemT, N> arr{};
         auto first = P::run(src);
         if (!first.ok) {
           auto r = Base::run(src);
           if (r.ok) r.val = arr;
+          else      r.err += "\n  <- SepBy at " + snip(orig);
           return r;
         }
-        if (!arr.push(first.val)) return {false, {}, src};
+        if (!arr.push(first.val))
+          return {false, {}, orig, "SepBy: overflow (>" + std::to_string(N) + ") at " + snip(src)};
         src = first.rest;
         while (src) {
           auto sep = Chain<Sep>::template Part<ParseAPI<char>>::run(src);
           if (!sep.ok) break;
           auto item = P::run(sep.rest);
           if (!item.ok) break;
-          if (!arr.push(item.val)) return {false, {}, src};
+          if (!arr.push(item.val))
+            return {false, {}, orig, "SepBy: overflow (>" + std::to_string(N) + ") at " + snip(src)};
           src = item.rest;
         }
         auto r = Base::run(src);
         if (r.ok) r.val = arr;
+        else      r.err += "\n  <- SepBy at " + snip(orig);
         return r;
       }
     };
@@ -576,21 +681,29 @@ namespace oneParse {
       using Base = O;
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
+        Src orig = src;
         Arr<ElemT, N> arr{};
         auto first = P::run(src);
-        if (!first.ok) return {false, {}, src};
-        if (!arr.push(first.val)) return {false, {}, src};
+        if (!first.ok) {
+          typename Base::Result r{false, {}, orig,
+            first.err + "\n  <- SepBy1: at least one item required at " + snip(orig)};
+          return r;
+        }
+        if (!arr.push(first.val))
+          return {false, {}, orig, "SepBy1: overflow (>" + std::to_string(N) + ") at " + snip(src)};
         src = first.rest;
         while (src) {
           auto sep = Chain<Sep>::template Part<ParseAPI<char>>::run(src);
           if (!sep.ok) break;
           auto item = P::run(sep.rest);
           if (!item.ok) break;
-          if (!arr.push(item.val)) return {false, {}, src};
+          if (!arr.push(item.val))
+            return {false, {}, orig, "SepBy1: overflow (>" + std::to_string(N) + ") at " + snip(src)};
           src = item.rest;
         }
         auto r = Base::run(src);
         if (r.ok) r.val = arr;
+        else      r.err += "\n  <- SepBy1 at " + snip(orig);
         return r;
       }
     };
@@ -605,9 +718,16 @@ namespace oneParse {
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
         auto probe = P::run(src);
-        if (!probe.ok || !F(probe.val)) return {false, {}, src};
+        if (!probe.ok) {
+          typename Base::Result r{false, {}, src,
+            probe.err + "\n  <- Verify at " + snip(src)};
+          return r;
+        }
+        if (!F(probe.val))
+          return {false, {}, src, std::string("Verify: predicate rejected value at ") + snip(src)};
         auto r = Base::run(probe.rest);
         if (r.ok) r.val = probe.val;
+        else      r.err += "\n  <- Verify at " + snip(src);
         return r;
       }
     };

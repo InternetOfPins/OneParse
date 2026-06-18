@@ -72,7 +72,7 @@ static void run(const char* input) {
   cout << "  \"" << input << "\"\n";
 
   if (!r.ok) {
-    cout << "    -> error: parse failed at \"" << (r.rest ? r.rest : "") << "\"" << endl;
+    cout << "    -> error: " << r.err << endl;
     return;
   }
   cout << "    -> Kelvin{ temp: " << r.val.temp
