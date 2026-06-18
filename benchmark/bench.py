@@ -39,6 +39,8 @@ PARSERS = [
     ("strlen",    ["-std=c++17", "-DPARSER_STRLEN"]),
     ("oneParse",  ["-std=c++17", "-DPARSER_ONEPARSE",
                    f"-I{OP_INC}", f"-I{HAPI_INC}"]),
+    ("op-nokey",  ["-std=c++17", "-DPARSER_ONEPARSE_NOKEY",
+                   f"-I{OP_INC}", f"-I{HAPI_INC}"]),
     ("spirit.x3", ["-std=c++17", "-DPARSER_SPIRIT"]),
     ("lexy",      ["-std=c++20", "-DPARSER_LEXY",
                    f"-I{LEXY_INC}"]),
@@ -117,7 +119,8 @@ with open(HISTORY_CSV, newline="") as f:
 
 # ── Plot ─────────────────────────────────────────────────────────────────────
 
-COLORS  = {"oneParse": "green", "spirit.x3": "red", "strlen": "gray", "lexy": "steelblue"}
+COLORS  = {"oneParse": "green", "op-nokey": "limegreen",
+           "spirit.x3": "red", "strlen": "gray", "lexy": "steelblue"}
 MARKERS = {"small.json": "o", "medium.json": "s", "large.json": "^"}
 
 fig = plt.figure(figsize=(16, 7), layout="constrained")

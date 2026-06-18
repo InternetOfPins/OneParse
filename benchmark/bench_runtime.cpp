@@ -10,7 +10,8 @@
 // Stdout: parser_name,input_path,bytes,iterations,median_ms
 
 // Guard: empty translation unit when compiled without -DPARSER_XXX (e.g. by a library scanner)
-#if defined(PARSER_STRLEN) || defined(PARSER_ONEPARSE) || defined(PARSER_SPIRIT) || defined(PARSER_LEXY)
+#if defined(PARSER_STRLEN) || defined(PARSER_ONEPARSE) || defined(PARSER_ONEPARSE_NOKEY) \
+ || defined(PARSER_SPIRIT) || defined(PARSER_LEXY)
 
 #include <chrono>
 #include <fstream>
@@ -37,26 +38,31 @@ static std::string read_file(const char* path) {
 static const char PARSER_NAME[] = "strlen";
 static void parse(const char* s) { volatile std::size_t n = std::strlen(s); (void)n; }
 
-// ─── OneParse ──────────────────────────────────────────────────────────────
+// ─── OneParse (full + nokey variants) ─────────────────────────────────────
 //
-// Stores results in Arr<Pair<string,Val>,8> — stack-allocated container,
-// heap-allocated std::string per key and string value.
+// full    (PARSER_ONEPARSE):        Arr<Pair<string_view,Val>,8> — keys + typed values
+// nokey   (PARSER_ONEPARSE_NOKEY):  Arr<Val,8>                  — typed values, keys discarded
 
-#elif defined(PARSER_ONEPARSE)
+#elif defined(PARSER_ONEPARSE) || defined(PARSER_ONEPARSE_NOKEY)
 
 #include <hapi/hapi.h>
 #include <oneParse/oneParse.h>
 using namespace oneParse;
 
+#if defined(PARSER_ONEPARSE)
 static const char PARSER_NAME[] = "oneParse";
+#else
+static const char PARSER_NAME[] = "op-nokey";
+#endif
 
 struct Val {
     enum class Kind : uint8_t { None, Null, Bool, Int, Str } kind = Kind::None;
-    std::string_view str{};  // view into source buffer — no heap allocation
+    std::string_view str{};
     int  i = 0;
     bool b = false;
 };
 
+// Store quoted string content as string_view into source buffer
 struct QuotedBody {
     template<typename O> struct Part : O {
         using Base = O;
@@ -71,6 +77,18 @@ struct QuotedBody {
     };
 };
 using QuotedP = ParseDef<std::string_view, QuotedBody>;
+
+// Advance past quoted string content without storing anything
+struct QuotedSkip {
+    template<typename O> struct Part : O {
+        using Base = O;
+        using Base::Base;
+        static auto run(Src src) -> typename Base::Result {
+            while (src && *src && *src != '"') ++src;
+            return Base::run(src);
+        }
+    };
+};
 
 static int digitsToInt(Arr<char,10> a) {
     int n = 0;
@@ -88,8 +106,6 @@ constexpr const char kNull[]  = "null";
 constexpr const char kTrue[]  = "true";
 constexpr const char kFalse[] = "false";
 
-using KeyP     = ParseDef<std::string_view, SkipWs,
-                           Between<Char<'"'>, QuotedP, Char<'"'>>>;
 using MagP     = ParseDef<Arr<char,10>, SomeN<ParseDef<char,Digit>,10>>;
 using SignP    = ParseDef<char, Opt<Or<Char<'+'>, Char<'-'>>>>;
 using StrComp  = To<std::string_view, asStr, Between<Char<'"'>, QuotedP, Char<'"'>>>;
@@ -102,15 +118,34 @@ using ValComp  = Or<FirstChar<'"', StrComp>,
                 Or<FirstChar<'t', TrueComp>,
                 Or<FirstChar<'f', FalseComp>,
                                   IntComp>>>>;
-using ColonP   = ParseDef<Val, Skip<SkipWs, Char<':'>, SkipWs>, ValComp>;
-using MemberP  = ParseDef<Pair<std::string_view,Val>, Seq<KeyP, ColonP>>;
 using CommaP   = Skip<SkipWs, Char<','>, SkipWs>;
 using CloseP   = Skip<SkipWs, Char<'}'>>;
+
+#if defined(PARSER_ONEPARSE)
+
+using KeyP     = ParseDef<std::string_view, SkipWs,
+                           Between<Char<'"'>, QuotedP, Char<'"'>>>;
+using ColonP   = ParseDef<Val, Skip<SkipWs, Char<':'>, SkipWs>, ValComp>;
+using MemberP  = ParseDef<Pair<std::string_view,Val>, Seq<KeyP, ColonP>>;
 using BodyP    = ParseDef<Arr<Pair<std::string_view,Val>,8>, SepBy<MemberP, CommaP, 8>>;
 using ObjectP  = ParseDef<Arr<Pair<std::string_view,Val>,8>,
     Skip<Many<Space>>, Between<Char<'{'>, BodyP, CloseP>>;
 
 static void parse(const char* s) { (void)ObjectP::run(s); }
+
+#else // PARSER_ONEPARSE_NOKEY
+
+// Skip<SkipWs, Char<'"'>, QuotedSkip, Char<'"'>, SkipWs, Char<':'>, SkipWs>
+// advances past the entire  "key" :  prefix; ValComp downstream provides the value.
+using SkipKeyColon = Skip<SkipWs, Char<'"'>, QuotedSkip, Char<'"'>, SkipWs, Char<':'>, SkipWs>;
+using NoKeyMemberP = ParseDef<Val, SkipKeyColon, ValComp>;
+using BodyNoKeyP   = ParseDef<Arr<Val,8>, SepBy<NoKeyMemberP, CommaP, 8>>;
+using ObjectNoKeyP = ParseDef<Arr<Val,8>,
+    Skip<Many<Space>>, Between<Char<'{'>, BodyNoKeyP, CloseP>>;
+
+static void parse(const char* s) { (void)ObjectNoKeyP::run(s); }
+
+#endif
 
 // ─── Spirit.X3 ─────────────────────────────────────────────────────────────
 //
