@@ -166,29 +166,14 @@ void test_query_on_parsedef() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-#ifdef ARDUINO
-  void setup() {
-    Serial.begin(115200);
-    while (!Serial);
-    test_leaf_parsers();
-    test_seq();
-    test_or();
-    test_repetition();
-    test_skip_opt();
-    test_parsedef_chain_ops();
-    test_query_on_parsedef();
-  }
-  void loop() {}
-#else
-  int main() {
-    test_leaf_parsers();
-    test_seq();
-    test_or();
-    test_repetition();
-    test_skip_opt();
-    test_parsedef_chain_ops();
-    test_query_on_parsedef();
-    cout << "\nAll tests passed.\n";
-    return 0;
-  }
-#endif
+int main() {
+  test_leaf_parsers();
+  test_seq();
+  test_or();
+  test_repetition();
+  test_skip_opt();
+  test_parsedef_chain_ops();
+  test_query_on_parsedef();
+  cout << "\nAll tests passed.\n";
+  return 0;
+}

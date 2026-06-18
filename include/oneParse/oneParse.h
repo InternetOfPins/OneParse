@@ -71,6 +71,12 @@ namespace oneParse {
   // Many<P> and Some<P> declare rules() that reject ZeroWidth inner components.
   struct ZeroWidthTag {};
 
+  // --- Value-leaf tag ---------------------------------------------------------
+  // Components that overwrite r.val on the way back up the call stack inherit from this.
+  // Only one ValueLeafTag component may appear as a direct member of any flat Chain;
+  // additional value sources must be structural (Or, Opt, To, As, Seq, ...).
+  struct ValueLeafTag {};
+
   // --- String literal component ----------------------------------------------
 
   // Match the null-terminated string S exactly; on failure does not consume input
@@ -94,7 +100,7 @@ namespace oneParse {
 
   // Match one specific character
   template<char C>
-  struct Char {
+  struct Char : ValueLeafTag {
     template<typename O>
     struct Part : O {
       using Base = O;
@@ -112,7 +118,7 @@ namespace oneParse {
 
   // Match any character satisfying a predicate
   template<bool(*F)(char)>
-  struct Satisfy {
+  struct Satisfy : ValueLeafTag {
     template<typename O>
     struct Part : O {
       using Base = O;
@@ -130,7 +136,7 @@ namespace oneParse {
 
   // Match a character in the inclusive range [Lo, Hi] — delegates to Quick::Range
   template<char Lo, char Hi>
-  struct Range {
+  struct Range : ValueLeafTag {
     template<typename O>
     struct Part : O {
       using Base = O;
@@ -148,7 +154,7 @@ namespace oneParse {
 
   // Match any character accepted by any of the Quick::Range/Ranges-compatible types
   template<typename... RR>
-  struct Ranges {
+  struct Ranges : ValueLeafTag {
     template<typename O>
     struct Part : O {
       using Base = O;
@@ -166,7 +172,7 @@ namespace oneParse {
 
   // Match any character in the compile-time character set
   template<char... Cs>
-  struct AnyOf {
+  struct AnyOf : ValueLeafTag {
     static constexpr bool contains(char c) { return ((c == Cs) || ...); }
     template<typename O>
     struct Part : O {
@@ -187,7 +193,7 @@ namespace oneParse {
 
   // Match any single character where P does NOT match
   template<typename P>
-  struct Not {
+  struct Not : ValueLeafTag {
     template<typename O>
     struct Part : O {
       using Base = O;
@@ -216,8 +222,9 @@ namespace oneParse {
     struct Part : O {
       using Base = O;
       using Base::Base;
+      using T = typename Base::Type;
       static auto run(Src src) -> typename Base::Result {
-        auto probe = Chain<P>::template Part<ParseAPI<char>>::run(src);
+        auto probe = Chain<P>::template Part<ParseAPI<T>>::run(src);
         if (probe.ok) {
           auto r = Base::run(probe.rest);
           if (r.ok) r.val = probe.val;
@@ -451,7 +458,7 @@ namespace oneParse {
   };
 
   // Match any single non-null character
-  struct Any {
+  struct Any : ValueLeafTag {
     template<typename O>
     struct Part : O {
       using Base = O;

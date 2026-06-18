@@ -13,10 +13,6 @@
 // because they contain complex branching / lookahead logic.
 // ItemP, ChoiceP, ProductionP, GrammarP are pure combinators.
 
-#ifdef ARDUINO
-  #include <Arduino.h>
-#endif
-
 #include <iostream>
 using namespace std;
 
@@ -320,9 +316,4 @@ void run() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-#ifdef ARDUINO
-  void setup() { Serial.begin(115200); while (!Serial); run(); }
-  void loop() {}
-#else
-  int main() { run(); return 0; }
-#endif
+int main() { run(); return 0; }

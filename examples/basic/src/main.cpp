@@ -3,10 +3,6 @@
  * @brief OneParse basic example — leaf, negation, and meta parsers
  */
 
-#ifdef ARDUINO
-  #include <Arduino.h>
-#endif
-
 #include <iostream>
 using namespace std;
 
@@ -126,9 +122,4 @@ void run() {
          << "  rest=\"" << r.rest << "\"" << endl; }
 }
 
-#ifdef ARDUINO
-  void setup() { Serial.begin(115200); while (!Serial); run(); }
-  void loop() {}
-#else
-  int main() { run(); return 0; }
-#endif
+int main() { run(); return 0; }

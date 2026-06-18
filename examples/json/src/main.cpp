@@ -1,4 +1,4 @@
-// OneParse json example — flat JSON object parser
+// OneParse json example — flat JSON object parser (native / PC only)
 //
 // Inspired by paco json-paco-ast (github.com/neu-rah/paco):
 //   _null  = string("null").as(_ => null)
@@ -11,10 +11,6 @@
 //
 // Parses flat JSON objects: null, bool, int, string values.
 // Demonstrates: Between, SepBy, Not, Or, To, Str (keyword matching)
-
-#ifdef ARDUINO
-  #include <Arduino.h>
-#endif
 
 #include <iostream>
 #include <string>
@@ -167,9 +163,4 @@ void run() {
 
 // -----------------------------------------------------------------------------
 
-#ifdef ARDUINO
-  void setup() { Serial.begin(115200); while (!Serial); run(); }
-  void loop() {}
-#else
-  int main() { run(); return 0; }
-#endif
+int main() { run(); return 0; }

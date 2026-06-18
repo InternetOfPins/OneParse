@@ -12,10 +12,6 @@
  *   .failMsg("positive Kelvin!")
  */
 
-#ifdef ARDUINO
-  #include <Arduino.h>
-#endif
-
 #include <iostream>
 using namespace std;
 
@@ -85,28 +81,13 @@ static void run(const char* input) {
 
 // -----------------------------------------------------------------------------
 
-#ifdef ARDUINO
-  void setup() {
-    Serial.begin(115200);
-    while (!Serial);
-    run("temp: 12K");
-    run("temp: +273K");
-    run("temp: 0K");
-    run("temp: -5K");
-    run("temp: 300C");
-    run("temp: K");
-    run("humidity: 50K");
-  }
-  void loop() {}
-#else
-  int main() {
-    run("temp: 12K");
-    run("temp: +273K");
-    run("temp: 0K");
-    run("temp: -5K");
-    run("temp: 300C");
-    run("temp: K");
-    run("humidity: 50K");
-    return 0;
-  }
-#endif
+int main() {
+  run("temp: 12K");
+  run("temp: +273K");
+  run("temp: 0K");
+  run("temp: -5K");
+  run("temp: 300C");
+  run("temp: K");
+  run("humidity: 50K");
+  return 0;
+}
