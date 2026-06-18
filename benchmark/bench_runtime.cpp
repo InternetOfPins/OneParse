@@ -10,7 +10,7 @@
 // Stdout: parser_name,input_path,bytes,iterations,median_ms
 
 // Guard: empty translation unit when compiled without -DPARSER_XXX (e.g. by a library scanner)
-#if defined(PARSER_STRLEN) || defined(PARSER_ONEPARSE) || defined(PARSER_SPIRIT)
+#if defined(PARSER_STRLEN) || defined(PARSER_ONEPARSE) || defined(PARSER_SPIRIT) || defined(PARSER_LEXY)
 
 #include <chrono>
 #include <fstream>
@@ -145,6 +145,65 @@ static void parse(const char* s) {
     x3::phrase_parse(s, end,
         x3::lit('{') >> -(member % x3::lit(',')) >> x3::lit('}'),
         x3::space, keys);
+}
+
+// ─── lexy ──────────────────────────────────────────────────────────────────
+//
+// Stores keys as std::vector<std::string>; values are scanned but discarded.
+// Grammar: quoted key + colon + (quoted|alnum+) value, whitespace-skipped.
+
+#elif defined(PARSER_LEXY)
+
+#include <lexy/action/parse.hpp>
+#include <lexy/callback.hpp>
+#include <lexy/dsl.hpp>
+#include <lexy/input/string_input.hpp>
+#include <vector>
+
+static const char PARSER_NAME[] = "lexy";
+
+namespace grammar {
+    namespace dsl = lexy::dsl;
+
+    // double-quoted string content → std::string
+    struct key_prod : lexy::token_production {
+        static constexpr auto rule  = dsl::quoted(dsl::ascii::print);
+        static constexpr auto value = lexy::as_string<std::string>;
+    };
+
+    // value: quoted string | bare alnum+ (null/true/false/int) — discard
+    struct val_prod : lexy::token_production {
+        static constexpr auto rule = [] {
+            auto q    = dsl::quoted(dsl::ascii::print);
+            auto word = dsl::while_one(dsl::ascii::alnum);
+            return q | word;
+        }();
+        static constexpr auto value = lexy::noop;
+    };
+
+    // member: "key" : value → key as std::string
+    struct member {
+        static constexpr auto whitespace = dsl::ascii::space;
+        static constexpr auto rule =
+            dsl::p<key_prod> + dsl::colon + dsl::p<val_prod>;
+        static constexpr auto value = lexy::callback<std::string>(
+            [](std::string key) { return key; }
+        );
+    };
+
+    // object: { member (, member)* }
+    struct object {
+        static constexpr auto whitespace = dsl::ascii::space;
+        static constexpr auto rule =
+            dsl::curly_bracketed.opt_list(dsl::p<member>, dsl::sep(dsl::comma));
+        static constexpr auto value = lexy::as_list<std::vector<std::string>>;
+    };
+}
+
+static void parse(const char* s) {
+    auto input  = lexy::zstring_input(s);
+    auto result = lexy::parse<grammar::object>(input, lexy::noop);
+    (void)result;
 }
 
 #endif // inner parser selection
