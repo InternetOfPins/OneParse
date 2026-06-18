@@ -77,7 +77,7 @@ constexpr const char kFalse[] = "false";
 // --- Key parser ---------------------------------------------------------------
 
 using KeyP = ParseDef<string_view,
-    Skip<Many<Space>>,
+    SkipWs,
     Between<Char<'"'>, QuotedP, Char<'"'>>>;
 
 // --- Value components (each lifts its result to Val) --------------------------
@@ -93,23 +93,25 @@ using MagP = ParseDef<Arr<char,10>, SomeN<ParseDef<char,Digit>,10>>;
 using SignP = ParseDef<char, Opt<Or<Char<'+'>, Char<'-'>>>>;
 using IntValComp = To<Pair<char,Arr<char,10>>, signedToVal, Seq<SignP, MagP>>;
 
-using AnyValComp = Or<NullComp,
-                   Or<TrueComp,
-                   Or<FalseComp,
-                   Or<StrValComp, IntValComp>>>>;
+// FirstChar dispatch: each Or branch fails in O(1) if first char doesn't match
+using AnyValComp = Or<FirstChar<'"', StrValComp>,
+                   Or<FirstChar<'n', NullComp>,
+                   Or<FirstChar<'t', TrueComp>,
+                   Or<FirstChar<'f', FalseComp>,
+                                     IntValComp>>>>;
 
 // --- Member: "key" : value ----------------------------------------------------
 
 using ValAfterColonP = ParseDef<Val,
-    Skip<Many<Space>, Char<':'>, Many<Space>>,
+    Skip<SkipWs, Char<':'>, SkipWs>,
     AnyValComp>;
 
 using MemberP = ParseDef<Pair<string_view,Val>, Seq<KeyP, ValAfterColonP>>;
 
 // --- Object -------------------------------------------------------------------
 
-using CommaP    = Skip<Many<Space>, Char<','>, Many<Space>>;
-using CloseObjP = Skip<Many<Space>, Char<'}'>>;
+using CommaP    = Skip<SkipWs, Char<','>, SkipWs>;
+using CloseObjP = Skip<SkipWs, Char<'}'>>;
 
 using MembersP = ParseDef<Arr<Pair<string_view,Val>, 8>,
     SepBy<MemberP, CommaP, 8>>;

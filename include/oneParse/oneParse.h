@@ -297,6 +297,19 @@ namespace oneParse {
     };
   };
 
+  // Fast whitespace skip — tighter than Many<Space>; uses a single byte compare
+  struct SkipWs : ZeroWidthTag {
+    template<typename O>
+    struct Part : O {
+      using Base = O;
+      using Base::Base;
+      static auto run(Src src) -> typename Base::Result {
+        while (src && (unsigned char)*src <= ' ') ++src;
+        return Base::run(src);
+      }
+    };
+  };
+
   // Advance past component chain PP... without contributing a value
   template<typename... PP>
   struct Skip {
@@ -348,6 +361,25 @@ namespace oneParse {
           "\n  P1: " + r1.err +
           "\n  P2: " + r2.err};
         return r;
+      }
+    };
+  };
+
+  // First-char dispatch: run P only if *src == C, otherwise fail without touching input.
+  // Use inside Or to avoid backtracking into P when input starts with the wrong char.
+  template<char C, typename P>
+  struct FirstChar
+      : std::conditional_t<std::is_base_of_v<ZeroWidthTag,P>, ZeroWidthTag, hapi::Nil> {
+    template<typename O>
+    struct Part : O {
+      using Base = O;
+      using Base::Base;
+      using T = typename Base::Type;
+      static auto run(Src src) -> typename Base::Result {
+        if (!src || *src != C)
+          return {false, {}, src,
+                  std::string("expected '") + C + "' at " + snip(src)};
+        return Chain<P>::template Part<ParseAPI<T>>::run(src);
       }
     };
   };

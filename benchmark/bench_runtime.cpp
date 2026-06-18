@@ -88,7 +88,7 @@ constexpr const char kNull[]  = "null";
 constexpr const char kTrue[]  = "true";
 constexpr const char kFalse[] = "false";
 
-using KeyP     = ParseDef<std::string_view, Skip<Many<Space>>,
+using KeyP     = ParseDef<std::string_view, SkipWs,
                            Between<Char<'"'>, QuotedP, Char<'"'>>>;
 using MagP     = ParseDef<Arr<char,10>, SomeN<ParseDef<char,Digit>,10>>;
 using SignP    = ParseDef<char, Opt<Or<Char<'+'>, Char<'-'>>>>;
@@ -97,11 +97,15 @@ using NullComp = To<char,        asNull,  Str<kNull>>;
 using TrueComp = To<char,        asTrue,  Str<kTrue>>;
 using FalseComp= To<char,        asFalse, Str<kFalse>>;
 using IntComp  = To<Pair<char,Arr<char,10>>, asInt, Seq<SignP, MagP>>;
-using ValComp  = Or<NullComp, Or<TrueComp, Or<FalseComp, Or<StrComp, IntComp>>>>;
-using ColonP   = ParseDef<Val, Skip<Many<Space>, Char<':'>, Many<Space>>, ValComp>;
+using ValComp  = Or<FirstChar<'"', StrComp>,
+                Or<FirstChar<'n', NullComp>,
+                Or<FirstChar<'t', TrueComp>,
+                Or<FirstChar<'f', FalseComp>,
+                                  IntComp>>>>;
+using ColonP   = ParseDef<Val, Skip<SkipWs, Char<':'>, SkipWs>, ValComp>;
 using MemberP  = ParseDef<Pair<std::string_view,Val>, Seq<KeyP, ColonP>>;
-using CommaP   = Skip<Many<Space>, Char<','>, Many<Space>>;
-using CloseP   = Skip<Many<Space>, Char<'}'>>;
+using CommaP   = Skip<SkipWs, Char<','>, SkipWs>;
+using CloseP   = Skip<SkipWs, Char<'}'>>;
 using BodyP    = ParseDef<Arr<Pair<std::string_view,Val>,8>, SepBy<MemberP, CommaP, 8>>;
 using ObjectP  = ParseDef<Arr<Pair<std::string_view,Val>,8>,
     Skip<Many<Space>>, Between<Char<'{'>, BodyP, CloseP>>;
