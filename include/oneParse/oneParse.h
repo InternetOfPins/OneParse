@@ -377,8 +377,7 @@ namespace oneParse {
       using T = typename Base::Type;
       static auto run(Src src) -> typename Base::Result {
         if (!src || *src != C)
-          return {false, {}, src,
-                  std::string("expected '") + C + "' at " + snip(src)};
+          return {false, {}, src};  // empty err — Or discards it if another branch succeeds
         return Chain<P>::template Part<ParseAPI<T>>::run(src);
       }
     };
