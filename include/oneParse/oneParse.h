@@ -492,7 +492,7 @@ namespace oneParse {
             first.err + "\n  <- SomeN: at least one match required at " + snip(orig)};
           return r;
         }
-        Arr<ElemT, N> arr{};
+        Arr<ElemT, N> arr;    // len=0 from DMI; data slots filled on push only
         arr.push(first.val);
         src = first.rest;
         while (src && *src) {
@@ -506,8 +506,12 @@ namespace oneParse {
           src = probe.rest;
         }
         auto r = Base::run(src);
-        if (r.ok) r.val = arr;
-        else      r.err += "\n  <- SomeN at " + snip(orig);
+        if (r.ok) {
+          r.val.len = arr.len;
+          for (std::size_t i = 0; i < arr.len; ++i) r.val.data[i] = arr.data[i];
+        } else {
+          r.err += "\n  <- SomeN at " + snip(orig);
+        }
         return r;
       }
     };
@@ -523,7 +527,7 @@ namespace oneParse {
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
         Src orig = src;
-        Arr<ElemT, N> arr{};
+        Arr<ElemT, N> arr;    // len=0 from DMI; data slots filled on push only
         while (src && *src) {
           auto probe = P::run(src);
           if (!probe.ok) break;
@@ -535,8 +539,12 @@ namespace oneParse {
           src = probe.rest;
         }
         auto r = Base::run(src);
-        if (r.ok) r.val = arr;
-        else      r.err += "\n  <- ManyN at " + snip(orig);
+        if (r.ok) {
+          r.val.len = arr.len;
+          for (std::size_t i = 0; i < arr.len; ++i) r.val.data[i] = arr.data[i];
+        } else {
+          r.err += "\n  <- ManyN at " + snip(orig);
+        }
         return r;
       }
     };
@@ -674,16 +682,15 @@ namespace oneParse {
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
         Src orig = src;
-        Arr<ElemT, N> arr{};
         auto first = P::run(src);
         if (!first.ok) {
           auto r = Base::run(src);
-          if (r.ok) r.val = arr;
+          if (r.ok) r.val.len = 0;
           else      r.err += "\n  <- SepBy at " + snip(orig);
           return r;
         }
-        if (!arr.push(first.val))
-          return {false, {}, orig, "SepBy: overflow (>" + std::to_string(N) + ") at " + snip(src)};
+        Arr<ElemT, N> arr;    // len=0 from DMI; data slots filled on push only
+        arr.push(first.val);
         src = first.rest;
         while (src) {
           auto sep = Chain<Sep>::template Part<ParseAPI<char>>::run(src);
@@ -695,8 +702,12 @@ namespace oneParse {
           src = item.rest;
         }
         auto r = Base::run(src);
-        if (r.ok) r.val = arr;
-        else      r.err += "\n  <- SepBy at " + snip(orig);
+        if (r.ok) {
+          r.val.len = arr.len;
+          for (std::size_t i = 0; i < arr.len; ++i) r.val.data[i] = arr.data[i];
+        } else {
+          r.err += "\n  <- SepBy at " + snip(orig);
+        }
         return r;
       }
     };
@@ -712,13 +723,13 @@ namespace oneParse {
       using Base::Base;
       static auto run(Src src) -> typename Base::Result {
         Src orig = src;
-        Arr<ElemT, N> arr{};
         auto first = P::run(src);
         if (!first.ok) {
           typename Base::Result r{false, {}, orig,
             first.err + "\n  <- SepBy1: at least one item required at " + snip(orig)};
           return r;
         }
+        Arr<ElemT, N> arr;    // len=0 from DMI; data slots filled on push only
         if (!arr.push(first.val))
           return {false, {}, orig, "SepBy1: overflow (>" + std::to_string(N) + ") at " + snip(src)};
         src = first.rest;
@@ -732,8 +743,12 @@ namespace oneParse {
           src = item.rest;
         }
         auto r = Base::run(src);
-        if (r.ok) r.val = arr;
-        else      r.err += "\n  <- SepBy1 at " + snip(orig);
+        if (r.ok) {
+          r.val.len = arr.len;
+          for (std::size_t i = 0; i < arr.len; ++i) r.val.data[i] = arr.data[i];
+        } else {
+          r.err += "\n  <- SepBy1 at " + snip(orig);
+        }
         return r;
       }
     };
