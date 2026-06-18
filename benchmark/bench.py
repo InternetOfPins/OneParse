@@ -123,7 +123,7 @@ COLORS  = {"oneParse": "green", "op-nokey": "limegreen",
            "spirit.x3": "red", "strlen": "gray", "lexy": "steelblue"}
 MARKERS = {"small.json": "o", "medium.json": "s", "large.json": "^"}
 
-fig = plt.figure(figsize=(16, 7), layout="constrained")
+fig = plt.figure(figsize=(18, 7), layout="constrained")
 gs  = gridspec.GridSpec(1, 2, figure=fig, wspace=0.35)
 fig.suptitle(
     f"OneParse  v{version}  —  Runtime Parsing Benchmark\n"
@@ -135,7 +135,7 @@ fig.suptitle(
 ax1 = fig.add_subplot(gs[0, 0])
 parser_names = [n for n, _ in PARSERS if n != "strlen"]
 x       = list(range(len(DATA_FILES)))
-width   = 0.35
+width   = 0.18
 for i, pname in enumerate(parser_names):
     vals = []
     for fname in DATA_FILES:
