@@ -332,9 +332,9 @@ namespace oneParse {
       size_t run_n(const char* s, size_t n) {
         using RC = detail::is_single_reject<P>;
         if constexpr (RC::value) {
-          // memchr: libc SIMD search — wins for string bodies ≥ 8 bytes (crossover verified)
-          // tight loop wins below 8 (call overhead dominates); n is remaining input,
-          // not string body length — threshold fires conservatively
+          // memchr: libc SIMD search — wins for string bodies ≥ 8 bytes (micro-bench verified)
+          // n is remaining input, not body length — for quoted strings inside Meta the
+          // Meta fast path calls memchr directly and never reaches here
           if (n >= 8) {
             const char* end = (const char*)std::memchr(s, (unsigned char)RC::ch, n);
             size_t count = end ? (size_t)(end - s) : n;
