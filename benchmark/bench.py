@@ -33,7 +33,7 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 # ── Config ─────────────────────────────────────────────────────────────────
 
 ITERS      = 20000
-RUNS       = 5
+RUNS       = 10
 DATA_FILES = ["small.json", "medium.json", "large.json", "longstr.json"]
 CSV_FIELDS = ["date", "version", "parser", "input",
               "bytes", "iters", "median_ms", "throughput_mbs"]

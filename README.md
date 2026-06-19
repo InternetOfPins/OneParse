@@ -15,6 +15,8 @@ struct Res { bool ok; T val; Src rest; operator bool() const { return ok; } };
 
 Each component is a struct with an inner `Part<O>` that wraps the next link in the chain. `ParserDef<T, OO...>` wires the chain together.
 
+The usual TMP complaints — exponential compile times, unreadable errors, impenetrable extension model — come from recursive template evaluation and opaque internal types. `ParserDef` avoids both: chain folding uses pack expansion (linear in chain length), and errors name the user's own component types in chain order (`Skip<Space>::Part<Alpha::Part<ParseAPI<char>>>`), not library internals. Adding a component is one struct with one `Part<O>`.
+
 ## Components
 
 | Component | Matches |

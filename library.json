@@ -1,6 +1,6 @@
 {
   "name": "OneParse",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "HAPI parser combinator components",
   "keywords": "components, parser, combinators",
   "repository":
