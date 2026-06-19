@@ -9,6 +9,7 @@
 //
 // No AST, no type conversion. Matched chars flow via put() to the output chain.
 // Error on bad input: silent fail (streaming model — print at fail site if needed).
+// Note: streaming result type is StreamRes (not Res<T> which is for typed parsers).
 
 #include <oneParse/oneParse.h>
 #include <oneOutput/oneOutput.h>
@@ -49,16 +50,16 @@ struct JsonObj {
     typename JsonStr::template Part<O> key;
     typename JsonVal::template Part<O> val;
 
-    Res run(char c) {
+    StreamRes run(char c) {
       switch (phase) {
 
         case Phase::Open:
-          if (c=='{') { phase=Phase::AfterOpen; return Res::Ok(c); }
-          return Res::Fail();
+          if (c=='{') { phase=Phase::AfterOpen; return StreamRes::Ok(c); }
+          return StreamRes::Fail();
 
         case Phase::AfterOpen:
-          if (isSpace(c)) return Res::Ok(c);
-          if (c=='}')     { phase=Phase::Done; return Res::Ok(c); }
+          if (isSpace(c)) return StreamRes::Ok(c);
+          if (c=='}')     { phase=Phase::Done; return StreamRes::Ok(c); }
           phase=Phase::Key;
           [[fallthrough]];
 
@@ -69,12 +70,12 @@ struct JsonObj {
         }
 
         case Phase::Colon:
-          if (isSpace(c)) return Res::Ok(c);
-          if (c==':') { put(':'); put(' '); phase=Phase::ValStart; return Res::Ok(c); }
-          return Res::Fail();
+          if (isSpace(c)) return StreamRes::Ok(c);
+          if (c==':') { put(':'); put(' '); phase=Phase::ValStart; return StreamRes::Ok(c); }
+          return StreamRes::Fail();
 
         case Phase::ValStart:
-          if (isSpace(c)) return Res::Ok(c);
+          if (isSpace(c)) return StreamRes::Ok(c);
           phase=Phase::Val;
           [[fallthrough]];
 
@@ -85,20 +86,20 @@ struct JsonObj {
         }
 
         case Phase::Sep:
-          if (isSpace(c)) return Res::Ok(c);
+          if (isSpace(c)) return StreamRes::Ok(c);
           if (c==',') {
             key = decltype(key){}; val = decltype(val){};
             phase=Phase::AfterOpen;
             put('\n');
-            return Res::Ok(c);
+            return StreamRes::Ok(c);
           }
-          if (c=='}') { phase=Phase::Done; return Res::Ok(c); }
-          return Res::Fail();
+          if (c=='}') { phase=Phase::Done; return StreamRes::Ok(c); }
+          return StreamRes::Fail();
 
         case Phase::Done:
-          return Res::Fail();
+          return StreamRes::Fail();
       }
-      return Res::Fail();
+      return StreamRes::Fail();
     }
   };
 };

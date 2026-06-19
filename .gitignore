@@ -75,3 +75,8 @@ Testing/
 # benchmark build output
 benchmark/build/
 benchmark/*.png
+
+# benchmark vendor libraries (extracted from zips)
+benchmark/lexy_src/
+benchmark/pegtl_src/
+benchmark/simdjson_src/

@@ -75,15 +75,13 @@ struct NCNameCollect {
     using Base = O;
     using Base::Base;
     static auto run(Src src) -> typename Base::Result {
-      if (!src || !isNameStart(*src)) return {err_v, src};
+      if (!src || !isNameStart(*src)) return Base::fail(src, "expected NCName");
       Arr<char,32> arr{};
       while (src && *src && isNameChar(*src)) {
-        if (!arr.push(*src)) return {err_v, src};
+        if (!arr.push(*src)) return Base::fail(src, "NCName too long");
         ++src;
       }
-      auto r = Base::run(src);
-      if (r.ok) r.val = arr;
-      return r;
+      return Base::ok(src, arr);
     }
   };
 };
@@ -93,8 +91,8 @@ using NCNameP = ParseDef<Arr<char,32>, NCNameCollect>;
 using SQBody = ParseDef<Arr<char,32>, ManyN<ParseDef<char, Not<Char<'\''>>>, 32>>;
 using DQBody = ParseDef<Arr<char,32>, ManyN<ParseDef<char, Not<Char<'"'>>>,  32>>;
 using StringLiteralP = ParseDef<Arr<char,32>,
-    Or<Between<Char<'\''>, SQBody, Char<'\''>>,
-       Between<Char<'"'>,  DQBody, Char<'"'>>>>;
+    TryOr<Between<Char<'\''>, SQBody, Char<'\''>>,
+          Between<Char<'"'>,  DQBody, Char<'"'>>>>;
 
 // CharCode: #xHH...
 constexpr bool isHexD(char c) {
@@ -113,8 +111,20 @@ using CharClassP    = ParseDef<Arr<char,32>, Between<Char<'['>, CharClassBody, C
 constexpr const char kCOpen[]  = "/*";
 constexpr const char kCClose[] = "*/";
 using CommentSkip = Skip<Str<kCOpen>, ManyTill<Any, Str<kCClose>>, Str<kCClose>>;
-using Ws          = Many<Or<Space, CommentSkip>>;   // component: zero-width ws skip
-using WsP         = ParseDef<char, Ws>;             // complete parser for skipWs()
+
+// Ws: zero-width; skips spaces and /* ... */ comments (custom — Many<Or<...>> can't
+// dispatch on multi-char CommentSkip via single-char chk)
+struct Ws : ZeroWidthTag {
+  static Res<char> run(Src s) {
+    while (true) {
+      while (*s && isSpace(*s)) ++s;
+      auto c = CommentSkip::run(s); if (!c.ok) break;
+      s = c.rest;
+    }
+    return {true, '\0', s};
+  }
+};
+using WsP = ParseDef<char, Ws>;   // complete parser for skipWs()
 
 static Src skipWs(Src src) { return WsP::run(src).rest; }
 
@@ -146,15 +156,15 @@ struct PrimaryCollect {
       // CharCode before NCName — '#' is not a valid name start anyway
       { auto r = CharCodeP::run(src);
         if (r.ok) { p.kind=Primary::Kind::CharCode; p.text=r.val;
-                    auto res=Base::run(r.rest); if(res.ok) res.val=p; return res; } }
+                    return Base::ok(r.rest, p); } }
 
       { auto r = CharClassP::run(src);
         if (r.ok) { p.kind=Primary::Kind::CharClass; p.text=r.val;
-                    auto res=Base::run(r.rest); if(res.ok) res.val=p; return res; } }
+                    return Base::ok(r.rest, p); } }
 
       { auto r = StringLiteralP::run(src);
         if (r.ok) { p.kind=Primary::Kind::Str; p.text=r.val;
-                    auto res=Base::run(r.rest); if(res.ok) res.val=p; return res; } }
+                    return Base::ok(r.rest, p); } }
 
       // Group: '(' Choice ')' — parseChoiceImpl is the deferred function
       if (src && *src == '(') {
@@ -163,20 +173,20 @@ struct PrimaryCollect {
           Src ws = skipWs(inner.rest);
           if (ws && *ws == ')') {
             Choice* c = allocGroup();
-            if (!c) return {err_v, src};
+            if (!c) return Base::fail(src, "group pool exhausted");
             *c = inner.val;
             p.kind = Primary::Kind::Group; p.group = c;
-            auto res = Base::run(ws + 1); if(res.ok) res.val=p; return res;
+            return Base::ok(ws + 1, p);
           }
         }
-        return {err_v, src};
+        return Base::fail(src, "unclosed group");
       }
 
       { auto r = NCNameP::run(src);
         if (r.ok) { p.kind=Primary::Kind::Name; p.text=r.val;
-                    auto res=Base::run(r.rest); if(res.ok) res.val=p; return res; } }
+                    return Base::ok(r.rest, p); } }
 
-      return {err_v, src};
+      return Base::fail(src, "expected primary");
     }
   };
 };
@@ -213,9 +223,7 @@ struct SequenceCollect {
         if (!seq.push(ir.val)) break;
         src = ir.rest;
       }
-      auto r = Base::run(src);
-      if (r.ok) r.val = seq;
-      return r;
+      return Base::ok(src, seq);
     }
   };
 };
