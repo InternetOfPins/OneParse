@@ -1,0 +1,195 @@
+// test_stream.cpp — streaming API correctness tests
+//
+// Tests parsing boundaries: correct consumed-char counts, correct fail/ok,
+// consistent results between char-by-char and run_n paths.
+//
+// Covers: String<NoneOf<C>>, Meta (quoted-string fast path), Alt (table N>=5),
+//         TinyAlt (linear), and the memchr threshold boundary.
+//
+// Build:
+//   g++ -std=c++17 -O2 -I../include -I../../HAPI/include -I../../OneOutput/include \
+//       -o build/test_stream test/test_stream.cpp && ./build/test_stream
+
+#include <oneParse/oneParse.h>
+#include <cassert>
+#include <cstring>
+#include <iostream>
+#include <string>
+
+using namespace oneParse;
+
+struct Sink {
+    template<typename O> struct Part : O {
+        using Base = O; using Base::Base;
+        void put(char) {}
+    };
+};
+
+// Feed char-by-char; return number consumed before first fail.
+template<typename P>
+static size_t feed_chars(P& p, const char* s, size_t n) {
+    size_t i = 0;
+    for (; i < n; ++i)
+        if (p.run(s[i]).state == St::fail) break;
+    return i;
+}
+
+// ── String<NoneOf<'"'>> ───────────────────────────────────────────────────────
+
+using StrP = ParseDef<String<NoneOf<'"'>>, Sink>;
+
+static void test_string(size_t body_len) {
+    std::string body(body_len, 'x');
+    std::string input = body + '"';      // body + stopper
+
+    // run_n: should stop before the quote
+    StrP p1;
+    size_t r1 = p1.run_n(input.c_str(), input.size());
+    assert(r1 == body_len && "String run_n: wrong count");
+
+    // char-by-char: each body char ok, quote fails
+    StrP p2;
+    size_t r2 = feed_chars(p2, input.c_str(), input.size());
+    assert(r2 == body_len && "String char: wrong count");
+
+    assert(r1 == r2 && "String: run_n vs char mismatch");
+}
+
+// ── Meta<Char<'"'>, String<NoneOf<'"'>>, Char<'"'>> — quoted-string fast path ─
+
+using JsonStr  = Meta<Char<'"'>, String<NoneOf<'"'>>, Char<'"'>>;
+using MetaP    = ParseDef<JsonStr, Sink>;
+
+static void test_meta(size_t body_len) {
+    std::string body(body_len, 'a' + (char)(body_len % 26));
+    std::string input = '"' + body + '"';
+    size_t total = input.size();
+
+    // run_n: should consume exactly the full quoted string
+    MetaP p1;
+    size_t r1 = p1.run_n(input.c_str(), total);
+    assert(r1 == total && "Meta run_n: wrong count");
+
+    // char-by-char: all chars ok
+    MetaP p2;
+    size_t r2 = feed_chars(p2, input.c_str(), total);
+    assert(r2 == total && "Meta char: wrong count");
+
+    assert(r1 == r2 && "Meta: run_n vs char mismatch");
+
+    // run_n on body only (no closing quote) — should consume body chars, stop
+    MetaP p3;
+    std::string partial = '"' + body;
+    size_t r3 = p3.run_n(partial.c_str(), partial.size());
+    assert(r3 == partial.size() && "Meta partial run_n: wrong count");
+
+    // run_n should not accept a second string — cur should be at 2 (done)
+    MetaP p4;
+    p4.run_n(input.c_str(), total);
+    size_t r4 = p4.run_n(input.c_str(), total);  // second attempt must consume 0
+    assert(r4 == 0 && "Meta: accepted second string after completion");
+}
+
+// ── memchr threshold boundary ─────────────────────────────────────────────────
+
+static void test_boundary() {
+    for (size_t L : {5u, 6u, 7u, 8u, 9u, 15u, 16u, 17u}) {
+        test_string(L);
+        test_meta(L);
+    }
+}
+
+// ── Alt<5> (table path) and TinyAlt<5> (linear) ──────────────────────────────
+
+using JsonNum   = String<Or<Digit, Sign, Char<'.'>>>;
+using JsonNull  = Lit<'n','u','l','l'>;
+using JsonTrue  = Lit<'t','r','u','e'>;
+using JsonFalse = Lit<'f','a','l','s','e'>;
+
+using AltP     = ParseDef<Alt    <JsonStr, JsonNum, JsonNull, JsonTrue, JsonFalse>, Sink>;
+using TinyAltP = ParseDef<TinyAlt<JsonStr, JsonNum, JsonNull, JsonTrue, JsonFalse>, Sink>;
+
+struct AltCase { const char* input; size_t expect; };
+static const AltCase ALT_CASES[] = {
+    { "\"hello\"", 7  },
+    { "42",        2  },
+    { "null",      4  },
+    { "true",      4  },
+    { "false",     5  },
+    { "-3.14",     5  },
+    { "xyz",       0  },    // no match — consumed 0
+};
+
+// Note: Alt::run_n is a bulk-continuation path — it requires commitment via
+// run(first_char) first, and Char<C>'s stateless design means cur advances
+// only on failure, so the fast path fires starting from body state (cur==1),
+// not immediately after the opening delimiter. Tests here use char-by-char,
+// which exercises commitment + full dispatch without the state-split ambiguity.
+template<typename P>
+static void test_alt_impl(const char* label) {
+    for (auto& c : ALT_CASES) {
+        size_t n = std::strlen(c.input);
+        P pc;
+        size_t rc = feed_chars(pc, c.input, n);
+        if (rc != c.expect) {
+            std::cerr << label << " char: input=\"" << c.input
+                      << "\" expected=" << c.expect << " got=" << rc << "\n";
+            assert(false);
+        }
+    }
+}
+
+// ── quoted-string with non-uniform body ───────────────────────────────────────
+
+static void test_meta_mixed_body() {
+    // body contains all printable ASCII except '"' — exercises every byte value
+    std::string body;
+    for (char c = 32; c < 127; ++c) if (c != '"') body += c;
+    std::string input = '"' + body + '"';
+
+    MetaP p1, p2;
+    size_t r1 = p1.run_n(input.c_str(), input.size());
+    size_t r2 = feed_chars(p2, input.c_str(), input.size());
+    assert(r1 == input.size() && "mixed run_n: wrong count");
+    assert(r2 == input.size() && "mixed char: wrong count");
+    assert(r1 == r2            && "mixed: run_n vs char mismatch");
+}
+
+// ── runner ────────────────────────────────────────────────────────────────────
+
+void doStreamTests() {
+    static const size_t LENGTHS[] = {10, 20, 30, 50, 80};
+
+    std::cout << "String<NoneOf<'\"'>>  [10,20,30,50,80]:\n";
+    for (size_t L : LENGTHS) test_string(L);
+    std::cout << "  ok\n";
+
+    std::cout << "Meta quoted-string fast path  [10,20,30,50,80]:\n";
+    for (size_t L : LENGTHS) test_meta(L);
+    std::cout << "  ok\n";
+
+    std::cout << "memchr threshold boundary  [5,6,7,8,9,15,16,17]:\n";
+    test_boundary();
+    std::cout << "  ok\n";
+
+    std::cout << "Meta mixed body (all printable ASCII):\n";
+    test_meta_mixed_body();
+    std::cout << "  ok\n";
+
+    std::cout << "Alt<5> (table path):\n";
+    test_alt_impl<AltP>("Alt");
+    std::cout << "  ok\n";
+
+    std::cout << "TinyAlt<5> (linear path):\n";
+    test_alt_impl<TinyAltP>("TinyAlt");
+    std::cout << "  ok\n";
+
+    std::cout << "all streaming tests passed\n";
+}
+
+#ifdef ARDUINO
+  void setup() { Serial.begin(115200); while(!Serial); doStreamTests(); }
+  void loop() {}
+#else
+  int main() { doStreamTests(); return 0; }
+#endif
