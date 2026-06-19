@@ -184,14 +184,14 @@ struct JsonObj {
         typename JsonStr::template Part<O> key;
         typename JsonVal::template Part<O> val;
 
-        Res run(char c) {
+        StreamRes run(char c) {
             switch (phase) {
                 case Phase::Open:
-                    if (c=='{') { phase=Phase::AfterOpen; return Res::Ok(c); }
-                    return Res::Fail();
+                    if (c=='{') { phase=Phase::AfterOpen; return StreamRes::Ok(c); }
+                    return StreamRes::Fail();
                 case Phase::AfterOpen:
-                    if (isSpace(c)) return Res::Ok(c);
-                    if (c=='}')     { phase=Phase::Done; return Res::Ok(c); }
+                    if (isSpace(c)) return StreamRes::Ok(c);
+                    if (c=='}')     { phase=Phase::Done; return StreamRes::Ok(c); }
                     phase=Phase::Key;
                     [[fallthrough]];
                 case Phase::Key: {
@@ -200,11 +200,11 @@ struct JsonObj {
                     return r;
                 }
                 case Phase::Colon:
-                    if (isSpace(c)) return Res::Ok(c);
-                    if (c==':') { phase=Phase::ValStart; return Res::Ok(c); }
-                    return Res::Fail();
+                    if (isSpace(c)) return StreamRes::Ok(c);
+                    if (c==':') { phase=Phase::ValStart; return StreamRes::Ok(c); }
+                    return StreamRes::Fail();
                 case Phase::ValStart:
-                    if (isSpace(c)) return Res::Ok(c);
+                    if (isSpace(c)) return StreamRes::Ok(c);
                     phase=Phase::Val;
                     [[fallthrough]];
                 case Phase::Val: {
@@ -213,18 +213,34 @@ struct JsonObj {
                     return r;
                 }
                 case Phase::Sep:
-                    if (isSpace(c)) return Res::Ok(c);
+                    if (isSpace(c)) return StreamRes::Ok(c);
                     if (c==',') {
                         key=decltype(key){}; val=decltype(val){};
                         phase=Phase::AfterOpen;
-                        return Res::Ok(c);
+                        return StreamRes::Ok(c);
                     }
-                    if (c=='}') { phase=Phase::Done; return Res::Ok(c); }
-                    return Res::Fail();
+                    if (c=='}') { phase=Phase::Done; return StreamRes::Ok(c); }
+                    return StreamRes::Fail();
                 case Phase::Done:
-                    return Res::Fail();
+                    return StreamRes::Fail();
             }
-            return Res::Fail();
+            return StreamRes::Fail();
+        }
+
+        // bulk path: fast-scan string bodies, char-by-char only for phase transitions
+        size_t run_n(const char* s, size_t n) {
+            size_t total = 0;
+            while (total < n) {
+                size_t k = 0;
+                if      (phase == Phase::Key) k = key.run_n(s + total, n - total);
+                else if (phase == Phase::Val) k = val.run_n(s + total, n - total);
+                if (k > 0) { total += k; }
+                else {
+                    if (run(s[total]).state == St::fail) break;
+                    ++total;
+                }
+            }
+            return total;
         }
     };
 };
@@ -234,7 +250,7 @@ using P = ParseDef<JsonObj, NullOut>;
 static volatile uint32_t sink = 0;
 static void parse(const char* s) {
     P p;
-    for (; *s; ++s) sink += (uint32_t)p.run(*s).state;
+    sink += (uint32_t)p.run_n(s, std::strlen(s));
 }
 
 // ─── Spirit.X3 ─────────────────────────────────────────────────────────────

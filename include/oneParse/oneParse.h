@@ -312,6 +312,12 @@ namespace oneParse {
         if (chk(c)) { put(c); return StreamRes::Ok(c); }
         return StreamRes::Fail();
       }
+      // bulk: tight chk loop — compiler auto-vectorises for simple predicates (e.g. NoneOf<C>)
+      size_t run_n(const char* s, size_t n) {
+        size_t i = 0;
+        while (i < n && chk(s[i])) { put(s[i]); ++i; }
+        return i;
+      }
     };
   };
 
@@ -419,6 +425,13 @@ namespace oneParse {
   // ── Streaming sequence / alternation ─────────────────────────────────────────
 
   namespace detail {
+    template<typename T, typename = void>
+    struct has_run_n : std::false_type {};
+    template<typename T>
+    struct has_run_n<T, std::void_t<decltype(
+        std::declval<T&>().run_n(std::declval<const char*>(), std::declval<size_t>()))>>
+      : std::true_type {};
+
     template<size_t I, size_t N, typename Tuple>
     StreamRes metaRun(Tuple& parts, size_t& cur, char c) {
       if constexpr (I >= N) { cur = 0; return StreamRes::Fail(); }
@@ -428,6 +441,18 @@ namespace oneParse {
         if (r.state != St::fail) return r;
         ++cur;
         return metaRun<I+1, N>(parts, cur, c);
+      }
+    }
+
+    // bulk path: call run_n on the component at cur if it supports it
+    template<size_t I, size_t N, typename Tuple>
+    size_t metaRunN(Tuple& parts, size_t cur, const char* s, size_t n) {
+      if constexpr (I >= N) return 0;
+      else {
+        if (cur != I) return metaRunN<I+1, N>(parts, cur, s, n);
+        auto& p = std::get<I>(parts);
+        if constexpr (has_run_n<std::decay_t<decltype(p)>>::value) return p.run_n(s, n);
+        else return 0;
       }
     }
 
@@ -449,6 +474,17 @@ namespace oneParse {
         return std::get<I>(parts).run(c);
       }
     }
+
+    template<size_t I, size_t N, typename Tuple>
+    size_t altRunN(Tuple& parts, int8_t idx, const char* s, size_t n) {
+      if constexpr (I >= N) return 0;
+      else {
+        if (idx != (int8_t)I) return altRunN<I+1, N>(parts, idx, s, n);
+        auto& p = std::get<I>(parts);
+        if constexpr (has_run_n<std::decay_t<decltype(p)>>::value) return p.run_n(s, n);
+        else return 0;
+      }
+    }
   } // namespace detail
 
   template<typename... PP>
@@ -463,6 +499,20 @@ namespace oneParse {
       }
       StreamRes run(char c) {
         return detail::metaRun<0, sizeof...(PP)>(parts, cur, c);
+      }
+      // bulk: delegate to current component if it has run_n; fall back char-by-char on transitions
+      size_t run_n(const char* s, size_t n) {
+        size_t total = 0;
+        while (total < n) {
+          size_t k = detail::metaRunN<0, sizeof...(PP)>(parts, cur, s + total, n - total);
+          if (k > 0) { total += k; }
+          else {
+            StreamRes r = run(s[total]);
+            if (r.state == St::fail) break;
+            ++total;
+          }
+        }
+        return total;
       }
     };
   };
@@ -486,6 +536,10 @@ namespace oneParse {
         auto r = detail::altRun<0, sizeof...(PP)>(parts, committed, c);
         if (r.state == St::fail) committed = -1;
         return r;
+      }
+      size_t run_n(const char* s, size_t n) {
+        if (committed < 0) return 0;
+        return detail::altRunN<0, sizeof...(PP)>(parts, committed, s, n);
       }
     };
   };
