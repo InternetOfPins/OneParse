@@ -156,53 +156,70 @@ ax1.set_xticklabels([f.replace(".json", "") for f in DATA_FILES])
 ax1.legend()
 ax1.grid(axis="y", alpha=0.5)
 
-# Panel right: OneParse throughput over time (one line per input file)
+# Panel right: OneParse throughput — every individual bench.py run as a point
 ax2 = fig.add_subplot(gs[0, 1])
-op_history = [r for r in history if r["parser"] == "oneParse"]
 
-# Build x-axis labels: unique (date, version) pairs in order of appearance
-x_labels = []
-seen = set()
-for r in op_history:
-    key = (r["date"], r["version"])
-    if key not in seen:
-        seen.add(key)
-        x_labels.append(f"{r['date']}\nv{r['version']}")
+# Detect run boundaries: each (strlen, small.json) row starts a new invocation
+run_id = -1
+annotated = []
+for r in history:
+    if r["parser"] == "strlen" and r["input"] == "small.json":
+        run_id += 1
+    annotated.append(dict(r, run_id=run_id))
 
-for fname in DATA_FILES:
-    data_for_file = [r for r in op_history if r["input"] == fname]
-    # one point per (date, version) pair
-    pts = {}
-    for r in data_for_file:
-        key = (r["date"], r["version"])
-        pts[key] = float(r["throughput_mbs"])
-    # build aligned series
-    all_keys = [(r["date"], r["version"]) for r in op_history
-                if r["input"] == fname]
-    # deduplicate preserving order
-    seen2, ordered = set(), []
-    for k in all_keys:
-        if k not in seen2:
-            seen2.add(k)
-            ordered.append(k)
-    xs = list(range(len(ordered)))
-    ys = [pts[k] for k in ordered]
-    lbls = [f"{k[0]}\nv{k[1]}" for k in ordered]
-    ax2.plot(xs, ys, marker=MARKERS.get(fname, "o"),
-             color="green",
-             linestyle=["-", "--", ":"][DATA_FILES.index(fname)],
-             label=fname.replace(".json", ""))
-    if xs:
-        ax2.set_xticks(xs)
-        ax2.set_xticklabels(lbls, fontsize=7)
+op_rows    = [r for r in annotated if r["parser"] == "oneParse"]
+runs_with_op = sorted({r["run_id"] for r in op_rows})
+run_to_xi  = {rid: xi for xi, rid in enumerate(runs_with_op)}
 
-ax2.set_title("OneParse throughput over time  (all inputs)")
-ax2.set_xlabel("Run  (date / version)")
+# x-axis label: v{ver} #N  (N = index within that version)
+ver_counts, x_labels = {}, []
+for rid in runs_with_op:
+    ver = next(r["version"] for r in annotated if r["run_id"] == rid)
+    ver_counts[ver] = ver_counts.get(ver, 0) + 1
+    x_labels.append(f"v{ver}\n#{ver_counts[ver]}")
+
+# shade background per version
+ver_spans = {}
+for xi, rid in enumerate(runs_with_op):
+    ver = next(r["version"] for r in annotated if r["run_id"] == rid)
+    lo, hi = ver_spans.get(ver, (xi, xi))
+    ver_spans[ver] = (min(lo, xi), max(hi, xi))
+shade_colors = ["#e8f4e8", "#d0e8ff", "#fff0d0", "#fde8e8"]
+for i, (ver, (lo, hi)) in enumerate(sorted(ver_spans.items())):
+    ax2.axvspan(lo - 0.4, hi + 0.4, alpha=0.35,
+                color=shade_colors[i % len(shade_colors)], zorder=0)
+
+# one line per input file
+for fi, fname in enumerate(DATA_FILES):
+    xs_f, ys_f = [], []
+    for rid in runs_with_op:
+        match = [r for r in op_rows if r["run_id"] == rid and r["input"] == fname]
+        if match:
+            xs_f.append(run_to_xi[rid])
+            ys_f.append(float(match[0]["throughput_mbs"]))
+    if xs_f:
+        ax2.plot(xs_f, ys_f,
+                 marker=MARKERS.get(fname, "o"), markersize=5,
+                 color="green",
+                 linestyle=["-", "--", ":"][fi],
+                 label=fname.replace(".json", ""), zorder=2)
+
+# version labels after data is plotted (ylim is now correct)
+for i, (ver, (lo, hi)) in enumerate(sorted(ver_spans.items())):
+    ax2.text((lo + hi) / 2, 1.0, f"v{ver}",
+             ha="center", va="bottom", fontsize=7, color="#555555",
+             transform=ax2.get_xaxis_transform())
+
+xs_all = list(range(len(runs_with_op)))
+ax2.set_xticks(xs_all)
+ax2.set_xticklabels(x_labels, fontsize=6)
+ax2.set_title("OneParse throughput — every run  (all inputs)")
+ax2.set_xlabel("Run")
 ax2.set_ylabel("MB / s")
 ax2.legend()
 ax2.grid(True, alpha=0.5)
 
-if not op_history:
+if not op_rows:
     ax2.text(0.5, 0.5, "No history yet", transform=ax2.transAxes,
              ha="center", va="center", fontsize=11, color="gray")
 
