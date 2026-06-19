@@ -22,6 +22,7 @@ CHART_OUT    = os.path.join(BENCH_DIR, "bench_runtime.png")
 LIBRARY_JSON = os.path.join(BENCH_DIR, "..", "library.json")
 HAPI_INC     = os.path.join(BENCH_DIR, "..", "..", "HAPI", "include")
 OP_INC       = os.path.join(BENCH_DIR, "..", "include")
+OUT_INC      = os.path.join(BENCH_DIR, "..", "..", "OneOutput", "include")
 LEXY_INC     = os.path.join(BENCH_DIR, "lexy_src", "include")
 
 os.makedirs(BUILD_DIR,   exist_ok=True)
@@ -37,10 +38,11 @@ CSV_FIELDS = ["date", "version", "parser", "input",
 
 PARSERS = [
     ("strlen",    ["-std=c++17", "-DPARSER_STRLEN"]),
-    ("oneParse",  ["-std=c++17", "-DPARSER_ONEPARSE",
-                   f"-I{OP_INC}", f"-I{HAPI_INC}"]),
-    ("op-nokey",  ["-std=c++17", "-DPARSER_ONEPARSE_NOKEY",
-                   f"-I{OP_INC}", f"-I{HAPI_INC}"]),
+    ("oneParse",  ["-std=c++17", "-DPARSER_ONEPARSE_STREAM",
+                   f"-I{OP_INC}", f"-I{HAPI_INC}", f"-I{OUT_INC}"]),
+    # old pointer-based API — needs full rewrite to re-enable
+    # ("oneParse",  ["-std=c++17", "-DPARSER_ONEPARSE",  ...]),
+    # ("op-nokey",  ["-std=c++17", "-DPARSER_ONEPARSE_NOKEY", ...]),
     ("spirit.x3", ["-std=c++17", "-DPARSER_SPIRIT"]),
     ("lexy",      ["-std=c++20", "-DPARSER_LEXY",
                    f"-I{LEXY_INC}"]),
@@ -133,9 +135,10 @@ fig.suptitle(
 
 # Panel left: current throughput (MB/s) — bar chart by parser × input file
 ax1 = fig.add_subplot(gs[0, 0])
+
 parser_names = [n for n, _ in PARSERS if n != "strlen"]
-x       = list(range(len(DATA_FILES)))
-width   = 0.18
+x     = list(range(len(DATA_FILES)))
+width = 0.18
 for i, pname in enumerate(parser_names):
     vals = []
     for fname in DATA_FILES:

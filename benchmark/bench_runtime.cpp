@@ -11,7 +11,7 @@
 
 // Guard: empty translation unit when compiled without -DPARSER_XXX (e.g. by a library scanner)
 #if defined(PARSER_STRLEN) || defined(PARSER_ONEPARSE) || defined(PARSER_ONEPARSE_NOKEY) \
- || defined(PARSER_SPIRIT) || defined(PARSER_LEXY)
+ || defined(PARSER_SPIRIT) || defined(PARSER_LEXY) || defined(PARSER_ONEPARSE_STREAM)
 
 #include <chrono>
 #include <fstream>
@@ -147,6 +147,96 @@ static void parse(const char* s) { (void)ObjectNoKeyP::run(s); }
 
 #endif
 
+// ─── OneParse streaming ────────────────────────────────────────────────────
+//
+// Char-by-char streaming JSON flat-object parser.
+// Uses Meta<>/Alt<>/String<>/Lit<> from oneParse.h.
+// NullOut sink — output chars discarded; sink += state prevents DCE.
+
+#elif defined(PARSER_ONEPARSE_STREAM)
+
+#include <oneParse/oneParse.h>
+#include <oneOutput/oneOutput.h>
+using namespace oneParse;
+
+static const char PARSER_NAME[] = "oneParse";
+
+struct NullOut {
+    template<typename O> struct Part : O {
+        using Base=O; using Base::Base;
+        void put(char) {}
+    };
+};
+
+using JsonStr   = Meta<Char<'"'>, String<NoneOf<'"'>>, Char<'"'>>;
+using JsonNum   = String<Or<Digit, Sign, Char<'.'>>>;
+using JsonNull  = Lit<'n','u','l','l'>;
+using JsonTrue  = Lit<'t','r','u','e'>;
+using JsonFalse = Lit<'f','a','l','s','e'>;
+using JsonVal   = Alt<JsonStr, JsonNum, JsonNull, JsonTrue, JsonFalse>;
+
+struct JsonObj {
+    template<typename O> struct Part : O {
+        using Base=O; using Base::Base; using Base::put;
+        enum class Phase : uint8_t {
+            Open, AfterOpen, Key, Colon, ValStart, Val, Sep, Done
+        } phase{Phase::Open};
+        typename JsonStr::template Part<O> key;
+        typename JsonVal::template Part<O> val;
+
+        Res run(char c) {
+            switch (phase) {
+                case Phase::Open:
+                    if (c=='{') { phase=Phase::AfterOpen; return Res::Ok(c); }
+                    return Res::Fail();
+                case Phase::AfterOpen:
+                    if (isSpace(c)) return Res::Ok(c);
+                    if (c=='}')     { phase=Phase::Done; return Res::Ok(c); }
+                    phase=Phase::Key;
+                    [[fallthrough]];
+                case Phase::Key: {
+                    auto r = key.run(c);
+                    if (r.state==St::fail) { phase=Phase::Colon; return run(c); }
+                    return r;
+                }
+                case Phase::Colon:
+                    if (isSpace(c)) return Res::Ok(c);
+                    if (c==':') { phase=Phase::ValStart; return Res::Ok(c); }
+                    return Res::Fail();
+                case Phase::ValStart:
+                    if (isSpace(c)) return Res::Ok(c);
+                    phase=Phase::Val;
+                    [[fallthrough]];
+                case Phase::Val: {
+                    auto r = val.run(c);
+                    if (r.state==St::fail) { phase=Phase::Sep; return run(c); }
+                    return r;
+                }
+                case Phase::Sep:
+                    if (isSpace(c)) return Res::Ok(c);
+                    if (c==',') {
+                        key=decltype(key){}; val=decltype(val){};
+                        phase=Phase::AfterOpen;
+                        return Res::Ok(c);
+                    }
+                    if (c=='}') { phase=Phase::Done; return Res::Ok(c); }
+                    return Res::Fail();
+                case Phase::Done:
+                    return Res::Fail();
+            }
+            return Res::Fail();
+        }
+    };
+};
+
+using P = ParseDef<JsonObj, NullOut>;
+
+static volatile uint32_t sink = 0;
+static void parse(const char* s) {
+    P p;
+    for (; *s; ++s) sink += (uint32_t)p.run(*s).state;
+}
+
 // ─── Spirit.X3 ─────────────────────────────────────────────────────────────
 //
 // Stores keys as std::vector<std::string>; values are scanned but omitted.
@@ -274,4 +364,4 @@ int main(int argc, char** argv) {
     return 0;
 }
 
-#endif // PARSER_STRLEN || PARSER_ONEPARSE || PARSER_SPIRIT
+#endif // PARSER_STRLEN || PARSER_ONEPARSE || PARSER_SPIRIT || PARSER_ONEPARSE_STREAM

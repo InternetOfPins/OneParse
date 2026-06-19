@@ -1,169 +1,131 @@
-// OneParse json example — flat JSON object parser (native / PC only)
+// OneParse streaming JSON flat-object parser
 //
-// Inspired by paco json-paco-ast (github.com/neu-rah/paco):
-//   _null  = string("null").as(_ => null)
-//   _true  = string("true").as(_ => true)
-//   _false = string("false").as(_ => false)
-//   string = skip('"') + many(noneOf('"')) + skip('"')
-//   number = optional('-') + int + optional(frac)
-//   member = string + skip(':') + value
-//   object = skip('{') + sepBy(member, ',') + skip('}')
+// Grammar:
+//   object = '{' member* '}'
+//   member = ws '"' key '"' ws ':' ws value ws sep
+//   value  = '"' chars '"'               (string — NoneOf<'"'>)
+//            | [-0-9.]+                  (number — String<Or<Digit,Sign,Char<'.'>>>)
+//            | "null" | "true" | "false" (keyword — Alt dispatch)
 //
-// Parses flat JSON objects: null, bool, int, string values.
-// Demonstrates: Between, SepBy, Not, Or, To, Str (keyword matching)
-
-#include <iostream>
-#include <string>
-#include <string_view>
-using namespace std;
+// No AST, no type conversion. Matched chars flow via put() to the output chain.
+// Error on bad input: silent fail (streaming model — print at fail site if needed).
 
 #include <oneParse/oneParse.h>
+#include <oneOutput/oneOutput.h>
+#include <iostream>
+using namespace std;
+using namespace oneOutput;
 using namespace oneParse;
 
-// --- Value type ---------------------------------------------------------------
+// ── JSON sub-parsers (composed from library primitives) ─────────────────────
 
-struct Val {
-  enum class Kind : uint8_t { None, Null, Bool, Int, Str } kind = Kind::None;
-  string_view str{};  // view into source buffer — no heap allocation
-  int    i = 0;
-  bool   b = false;
-};
+// Quoted string: open-quote, content (anything except '"'), close-quote
+using JsonStr = Meta<Char<'"'>, String<NoneOf<'"'>>, Char<'"'>>;
 
-// --- Local component: scan chars until '"', return view into source -----------
+// Number: leading sign or digit, then digits and dot
+using JsonNum = String<Or<Digit, Sign, Char<'.'>>>;
 
-struct QuotedBody {
-  template<typename O>
-  struct Part : O {
-    using Base = O;
-    using Base::Base;
-    static auto run(Src src) -> typename Base::Result {
-      const char* start = src;
-      while (src && *src && *src != '"') ++src;
-      auto r = Base::run(src);
-      if (r.ok) r.val = string_view(start, src - start);
-      return r;
+// Keywords matched as exact literals
+using JsonNull  = Lit<'n','u','l','l'>;
+using JsonTrue  = Lit<'t','r','u','e'>;
+using JsonFalse = Lit<'f','a','l','s','e'>;
+
+// Value: first-char dispatch commits to one branch, which runs until it fails
+using JsonVal = Alt<JsonStr, JsonNum, JsonNull, JsonTrue, JsonFalse>;
+
+// ── Top-level object state machine ──────────────────────────────────────────
+// The grammar structure (members, commas, braces) is stateful across many chars
+// — natural fit for a custom state machine. Sub-parsers above do the real work.
+
+struct JsonObj {
+  template<typename O> struct Part : O {
+    using Base=O; using Base::Base; using Base::put;
+
+    enum class Phase : uint8_t {
+      Open, AfterOpen, Key, Colon, ValStart, Val, Sep, Done
+    } phase{Phase::Open};
+
+    // Sub-parsers share the same output chain (O) as this Part
+    typename JsonStr::template Part<O> key;
+    typename JsonVal::template Part<O> val;
+
+    Res run(char c) {
+      switch (phase) {
+
+        case Phase::Open:
+          if (c=='{') { phase=Phase::AfterOpen; return Res::Ok(c); }
+          return Res::Fail();
+
+        case Phase::AfterOpen:
+          if (isSpace(c)) return Res::Ok(c);
+          if (c=='}')     { phase=Phase::Done; return Res::Ok(c); }
+          phase=Phase::Key;
+          [[fallthrough]];
+
+        case Phase::Key: {
+          auto r = key.run(c);
+          if (r.state==St::fail) { phase=Phase::Colon; return run(c); }
+          return r;
+        }
+
+        case Phase::Colon:
+          if (isSpace(c)) return Res::Ok(c);
+          if (c==':') { put(':'); put(' '); phase=Phase::ValStart; return Res::Ok(c); }
+          return Res::Fail();
+
+        case Phase::ValStart:
+          if (isSpace(c)) return Res::Ok(c);
+          phase=Phase::Val;
+          [[fallthrough]];
+
+        case Phase::Val: {
+          auto r = val.run(c);
+          if (r.state==St::fail) { phase=Phase::Sep; return run(c); }
+          return r;
+        }
+
+        case Phase::Sep:
+          if (isSpace(c)) return Res::Ok(c);
+          if (c==',') {
+            key = decltype(key){}; val = decltype(val){};
+            phase=Phase::AfterOpen;
+            put('\n');
+            return Res::Ok(c);
+          }
+          if (c=='}') { phase=Phase::Done; return Res::Ok(c); }
+          return Res::Fail();
+
+        case Phase::Done:
+          return Res::Fail();
+      }
+      return Res::Fail();
     }
   };
 };
 
-using QuotedP = ParseDef<string_view, QuotedBody>;
+// ── Wire up to output chain ─────────────────────────────────────────────────
 
-// --- Helpers ------------------------------------------------------------------
+using P = ParseDef<JsonObj, ConsoleOut>;
 
-static int digitsToInt(Arr<char,10> a) {
-  int n = 0;
-  for (size_t i = 0; i < a.len; i++) n = n * 10 + (a.data[i] - '0');
-  return n;
+static void parse(const char* src) {
+  P p;
+  cout << src << "\n  -> ";
+  for (const char* s=src; *s; ++s) p.run(*s);
+  cout << "\n\n";
 }
 
-static Val asNull(char)    { Val v; v.kind = Val::Kind::Null;              return v; }
-static Val asTrue(char)    { Val v; v.kind = Val::Kind::Bool; v.b = true;  return v; }
-static Val asFalse(char)   { Val v; v.kind = Val::Kind::Bool; v.b = false; return v; }
-static Val asStr(string_view s) { Val v; v.kind = Val::Kind::Str; v.str = s; return v; }
+// ── Demo ─────────────────────────────────────────────────────────────────────
 
-static Val signedToVal(Pair<char,Arr<char,10>> p) {
-  Val v;
-  v.kind = Val::Kind::Int;
-  v.i = (p.fst == '-' ? -1 : 1) * digitsToInt(p.snd);
-  return v;
+int main() {
+  cout << "=== streaming JSON flat-object parser ===\n\n";
+  parse(R"({"sensor":"temp","value":42,"unit":"C"})");
+  parse(R"({"active":true,"count":0,"name":"Alice","ref":null})");
+  parse(R"({"host":"192.168.1.1","port":8080,"tls":false})");
+  parse(R"({"x":-7,"y":0,"z":255})");
+  parse(R"({ "name" : "Alice" , "age" : 30 , "admin" : false })");
+  parse(R"({})");
+  cout << "=== edge cases (silent fail) ===\n\n";
+  parse(R"(not json)");
+  parse(R"({"unclosed":42)");
+  return 0;
 }
-
-// --- Keyword literals (Str<S> requires constexpr const char[] at namespace scope) ---
-
-constexpr const char kNull[]  = "null";
-constexpr const char kTrue[]  = "true";
-constexpr const char kFalse[] = "false";
-
-// --- Key parser ---------------------------------------------------------------
-
-using KeyP = ParseDef<string_view,
-    SkipWs,
-    Between<Char<'"'>, QuotedP, Char<'"'>>>;
-
-// --- Value components (each lifts its result to Val) --------------------------
-
-using NullComp  = To<char,        asNull,  Str<kNull>>;
-using TrueComp  = To<char,        asTrue,  Str<kTrue>>;
-using FalseComp = To<char,        asFalse, Str<kFalse>>;
-
-using StrValComp = To<string_view, asStr,
-    Between<Char<'"'>, QuotedP, Char<'"'>>>;
-
-using MagP = ParseDef<Arr<char,10>, SomeN<ParseDef<char,Digit>,10>>;
-using SignP = ParseDef<char, Opt<Or<Char<'+'>, Char<'-'>>>>;
-using IntValComp = To<Pair<char,Arr<char,10>>, signedToVal, Seq<SignP, MagP>>;
-
-// FirstChar dispatch: each Or branch fails in O(1) if first char doesn't match
-using AnyValComp = Or<FirstChar<'"', StrValComp>,
-                   Or<FirstChar<'n', NullComp>,
-                   Or<FirstChar<'t', TrueComp>,
-                   Or<FirstChar<'f', FalseComp>,
-                                     IntValComp>>>>;
-
-// --- Member: "key" : value ----------------------------------------------------
-
-using ValAfterColonP = ParseDef<Val,
-    Skip<SkipWs, Char<':'>, SkipWs>,
-    AnyValComp>;
-
-using MemberP = ParseDef<Pair<string_view,Val>, Seq<KeyP, ValAfterColonP>>;
-
-// --- Object -------------------------------------------------------------------
-
-using CommaP    = Skip<SkipWs, Char<','>, SkipWs>;
-using CloseObjP = Skip<SkipWs, Char<'}'>>;
-
-using MembersP = ParseDef<Arr<Pair<string_view,Val>, 8>,
-    SepBy<MemberP, CommaP, 8>>;
-
-using ObjectP = ParseDef<Arr<Pair<string_view,Val>, 8>,
-    Skip<Many<Space>>,
-    Between<Char<'{'>, MembersP, CloseObjP>>;
-
-// --- Printer ------------------------------------------------------------------
-
-static void printVal(const Val& v) {
-  switch (v.kind) {
-    case Val::Kind::Null: cout << "null";                    break;
-    case Val::Kind::Bool: cout << (v.b ? "true" : "false"); break;
-    case Val::Kind::Int:  cout << v.i;                       break;
-    case Val::Kind::Str:  cout << '"' << v.str << '"';       break;
-    default: cout << "?"; break;
-  }
-}
-
-static void runObj(const char* input) {
-  cout << input << "\n";
-  auto r = ObjectP::run(input);
-  if (!r.ok) { cout << "  -> error: " << r.err << "\n\n"; return; }
-  cout << "  -> {\n";
-  for (size_t i = 0; i < r.val.len; i++) {
-    cout << "       \"" << r.val.data[i].fst << "\": ";
-    printVal(r.val.data[i].snd);
-    cout << "\n";
-  }
-  cout << "     }\n\n";
-}
-
-// -----------------------------------------------------------------------------
-
-void run() {
-  cout << "=== JSON flat object parser ===\n\n";
-
-  runObj(R"({"sensor":"temp","value":42,"unit":"C"})");
-  runObj(R"({"active":true,"count":0,"name":"Alice","ref":null})");
-  runObj(R"({"host":"192.168.1.1","port":8080,"tls":false})");
-  runObj(R"({"x":-7,"y":0,"z":255})");
-  runObj(R"({ "name" : "Alice" , "age" : 30 , "admin" : false })");
-  runObj(R"({})");
-
-  cout << "=== edge cases ===\n\n";
-  runObj(R"(not json)");
-  runObj(R"({"unclosed":42)");
-  runObj(R"({"k":})");
-  runObj(R"({"tricky":"nullified","flag":true,"n":null})");
-}
-
-// -----------------------------------------------------------------------------
-
-int main() { run(); return 0; }
