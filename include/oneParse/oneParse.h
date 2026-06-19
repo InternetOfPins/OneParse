@@ -533,6 +533,13 @@ namespace oneParse {
       return t;
     }
 
+    // conditional storage: table only present (and ROM-allocated) when UseTable=true
+    template<bool UseTable, typename... PP> struct AltTableStorage {};
+    template<typename... PP>
+    struct AltTableStorage<true, PP...> {
+      static constexpr auto dispatch_table = make_alt_table<PP...>();
+    };
+
     template<size_t I, size_t N, typename Tuple>
     StreamRes altRun(Tuple& parts, int8_t idx, char c) {
       if constexpr (I >= N) return StreamRes::Fail();
@@ -629,9 +636,9 @@ namespace oneParse {
     };
   };
 
-  // Alt: linear first-char scan — zero extra memory, safe for MCUs
+  // TinyAlt: linear first-char scan — zero extra memory, always safe for MCUs
   template<typename... PP>
-  struct Alt {
+  struct TinyAlt {
     template<typename O> struct Part : O {
       using Base=O; using Base::Base;
       int8_t committed{-1};
@@ -640,7 +647,6 @@ namespace oneParse {
       static constexpr bool chk(char c) {
         return (PP::template Part<ParseAPI<Nil>>::chk(c)||...);
       }
-
       StreamRes run(char c) {
         if (committed < 0) {
           committed = detail::altFind<0, PP...>(c);
@@ -657,26 +663,35 @@ namespace oneParse {
     };
   };
 
-  // AltFast: O(1) first-char commit via 256-byte constexpr table — desktop/Linux
-  // Same interface as Alt; costs 256 bytes of static data per instantiation
+  // Alt: auto-selects strategy at compile time based on sizeof...(PP)
+  //   N < 5  → linear scan (TinyAlt path, no table allocated)
+  //   N >= 5 → 256-byte constexpr dispatch table (O(1) commit)
+  // Table is in ROM only when needed; MCU-safe for small alternations.
   template<typename... PP>
-  struct AltFast {
-    static constexpr auto dispatch_table = detail::make_alt_table<PP...>();
-
+  struct Alt : detail::AltTableStorage<(sizeof...(PP) >= 5), PP...> {
     template<typename O> struct Part : O {
       using Base=O; using Base::Base;
       int8_t committed{-1};
       std::tuple<typename PP::template Part<Base>...> parts;
 
-      static constexpr bool chk(char c) {
-        return AltFast::dispatch_table[(unsigned char)c] != 255;
-      }
+      static constexpr bool use_table = (sizeof...(PP) >= 5);
 
+      static constexpr bool chk(char c) {
+        if constexpr (use_table)
+          return detail::AltTableStorage<true, PP...>::dispatch_table[(unsigned char)c] != 255;
+        else
+          return (PP::template Part<ParseAPI<Nil>>::chk(c)||...);
+      }
       StreamRes run(char c) {
         if (committed < 0) {
-          uint8_t idx = AltFast::dispatch_table[(unsigned char)c];
-          if (idx == 255) return StreamRes::Fail();
-          committed = (int8_t)idx;
+          if constexpr (use_table) {
+            uint8_t idx = detail::AltTableStorage<true, PP...>::dispatch_table[(unsigned char)c];
+            if (idx == 255) return StreamRes::Fail();
+            committed = (int8_t)idx;
+          } else {
+            committed = detail::altFind<0, PP...>(c);
+            if (committed < 0) return StreamRes::Fail();
+          }
         }
         auto r = detail::altRun<0, sizeof...(PP)>(parts, committed, c);
         if (r.state == St::fail) committed = -1;
