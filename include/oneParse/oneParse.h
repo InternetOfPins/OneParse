@@ -462,6 +462,15 @@ namespace oneParse {
   // ── Streaming sequence / alternation ─────────────────────────────────────────
 
   namespace detail {
+    // detect Meta<Char<C>, String<Not<AnyOf<C>>>, Char<C>> — the quoted-string pattern
+    template<typename... PP>
+    struct is_quoted_string { static constexpr bool value = false; static constexpr char ch = 0; };
+    template<char C>
+    struct is_quoted_string<Char<C>, String<Not<AnyOf<C>>>, Char<C>> {
+      static constexpr bool value = true;
+      static constexpr char ch = C;
+    };
+
     template<typename T, typename = void>
     struct has_run_n : std::false_type {};
     template<typename T>
@@ -537,7 +546,51 @@ namespace oneParse {
       StreamRes run(char c) {
         return detail::metaRun<0, sizeof...(PP)>(parts, cur, c);
       }
-      // bulk: delegate to current component if it has run_n; fall back char-by-char on transitions
+      // bulk path for quoted-string pattern Meta<Char<C>, String<NoneOf<C>>, Char<C>>:
+      // eliminates 3 char-by-char run() calls (open quote, first body char, close quote)
+      // by using a direct char check + memchr + put loop per occurrence
+#ifndef ONE_PARSE_META_SLOW
+      size_t run_n(const char* s, size_t n) {
+        using QS = detail::is_quoted_string<PP...>;
+        if constexpr (QS::value) {
+          size_t total = 0;
+          while (total < n) {
+            if (cur == 0) {
+              if (s[total] != QS::ch) break;
+              std::get<0>(parts).run(s[total]); // put opening quote
+              cur = 1;
+              ++total;
+            } else if (cur == 1) {
+              const char* end = (const char*)std::memchr(
+                  s + total, (unsigned char)QS::ch, n - total);
+              size_t count = end ? (size_t)(end - (s + total)) : (n - total);
+              auto& body = std::get<1>(parts);
+              for (size_t i = 0; i < count; ++i) body.put(s[total + i]);
+              total += count;
+              if (!end) break;
+              std::get<2>(parts).run(s[total]); // put closing quote
+              cur = 2;
+              ++total;
+              break; // this Meta occurrence is complete
+            } else { break; }
+          }
+          return total;
+        }
+        // original: delegate to component run_n, char-by-char on transitions
+        size_t total = 0;
+        while (total < n) {
+          size_t k = detail::metaRunN<0, sizeof...(PP)>(parts, cur, s + total, n - total);
+          if (k > 0) { total += k; }
+          else {
+            StreamRes r = run(s[total]);
+            if (r.state == St::fail) break;
+            ++total;
+          }
+        }
+        return total;
+      }
+#else
+      // ONE_PARSE_META_SLOW: original path for comparison
       size_t run_n(const char* s, size_t n) {
         size_t total = 0;
         while (total < n) {
@@ -551,6 +604,7 @@ namespace oneParse {
         }
         return total;
       }
+#endif
     };
   };
 

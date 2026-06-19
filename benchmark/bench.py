@@ -144,7 +144,7 @@ fig.suptitle(
 # Panel left: current throughput (MB/s) — bar chart by parser × input file
 ax1 = fig.add_subplot(gs[0, 0])
 
-parser_names = [n for n, _ in PARSERS if n != "strlen"]
+parser_names = ["lexy", "pegtl", "oneParse", "simdjson", "spirit.x3"]
 x     = list(range(len(DATA_FILES)))
 width = 0.15
 # use last row per (parser, input) — handles multiple runs on same day
