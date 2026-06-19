@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <cstring>
 #include <tuple>
 #include <type_traits>
 #include <hapi/hapi.h>
@@ -299,6 +300,20 @@ namespace oneParse {
   template<char... CC>
   using NoneOf = Not<AnyOf<CC...>>;
 
+  // ── memchr optimisation: detect Not<AnyOf<C>> (= NoneOf<C>, single excluded char) ──────────
+  // Used by String::Part::run_n to replace the tight chk loop with memchr for longer bodies.
+  namespace detail {
+    template<typename P> struct is_single_reject {
+      static constexpr bool value = false;
+      static constexpr char ch = 0;
+    };
+    template<char C>
+    struct is_single_reject<Not<AnyOf<C>>> {
+      static constexpr bool value = true;
+      static constexpr char ch = C;
+    };
+  }
+
   // ── Multi-char streaming ─────────────────────────────────────────────────────
 
   template<typename P>
@@ -312,12 +327,34 @@ namespace oneParse {
         if (chk(c)) { put(c); return StreamRes::Ok(c); }
         return StreamRes::Fail();
       }
-      // bulk: tight chk loop — compiler auto-vectorises for simple predicates (e.g. NoneOf<C>)
+      // bulk: memchr for single-excluded-char predicates above threshold; tight loop elsewhere
+#ifndef ONE_PARSE_STRING_TIGHT_LOOP
+      size_t run_n(const char* s, size_t n) {
+        using RC = detail::is_single_reject<P>;
+        if constexpr (RC::value) {
+          // memchr: libc SIMD search — wins for string bodies ≥ 8 bytes (crossover verified)
+          // tight loop wins below 8 (call overhead dominates); n is remaining input,
+          // not string body length — threshold fires conservatively
+          if (n >= 8) {
+            const char* end = (const char*)std::memchr(s, (unsigned char)RC::ch, n);
+            size_t count = end ? (size_t)(end - s) : n;
+            for (size_t i = 0; i < count; ++i) put(s[i]);
+            return count;
+          }
+        }
+        // tight loop — short strings or multi-char predicates
+        size_t i = 0;
+        while (i < n && chk(s[i])) { put(s[i]); ++i; }
+        return i;
+      }
+#else
+      // ONE_PARSE_STRING_TIGHT_LOOP: original path — auto-vectorized by compiler at -O3
       size_t run_n(const char* s, size_t n) {
         size_t i = 0;
         while (i < n && chk(s[i])) { put(s[i]); ++i; }
         return i;
       }
+#endif
     };
   };
 

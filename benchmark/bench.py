@@ -23,7 +23,9 @@ LIBRARY_JSON = os.path.join(BENCH_DIR, "..", "library.json")
 HAPI_INC     = os.path.join(BENCH_DIR, "..", "..", "HAPI", "include")
 OP_INC       = os.path.join(BENCH_DIR, "..", "include")
 OUT_INC      = os.path.join(BENCH_DIR, "..", "..", "OneOutput", "include")
-LEXY_INC     = os.path.join(BENCH_DIR, "lexy_src", "include")
+LEXY_INC     = os.path.join(BENCH_DIR, "lexy_src",    "include")
+PEGTL_INC    = os.path.join(BENCH_DIR, "pegtl_src",   "include")
+SIMDJSON_SRC = os.path.join(BENCH_DIR, "simdjson_src")
 
 os.makedirs(BUILD_DIR,   exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -32,7 +34,7 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 
 ITERS      = 20000
 RUNS       = 5
-DATA_FILES = ["small.json", "medium.json", "large.json"]
+DATA_FILES = ["small.json", "medium.json", "large.json", "longstr.json"]
 CSV_FIELDS = ["date", "version", "parser", "input",
               "bytes", "iters", "median_ms", "throughput_mbs"]
 
@@ -46,6 +48,11 @@ PARSERS = [
     ("spirit.x3", ["-std=c++17", "-DPARSER_SPIRIT"]),
     ("lexy",      ["-std=c++20", "-DPARSER_LEXY",
                    f"-I{LEXY_INC}"]),
+    ("pegtl",     ["-std=c++17", "-DPARSER_PEGTL",
+                   f"-I{PEGTL_INC}"]),
+    ("simdjson",  ["-std=c++17", "-DPARSER_SIMDJSON",
+                   f"-I{SIMDJSON_SRC}",
+                   f"{SIMDJSON_SRC}/simdjson.cpp"]),
 ]
 
 BASE_FLAGS = ["g++", "-O2"]
@@ -122,14 +129,15 @@ with open(HISTORY_CSV, newline="") as f:
 # ── Plot ─────────────────────────────────────────────────────────────────────
 
 COLORS  = {"oneParse": "green", "op-nokey": "limegreen",
-           "spirit.x3": "red", "strlen": "gray", "lexy": "steelblue"}
-MARKERS = {"small.json": "o", "medium.json": "s", "large.json": "^"}
+           "spirit.x3": "red", "strlen": "gray", "lexy": "steelblue",
+           "pegtl": "darkorange", "simdjson": "purple"}
+MARKERS = {"small.json": "o", "medium.json": "s", "large.json": "^", "longstr.json": "D"}
 
 fig = plt.figure(figsize=(18, 7), layout="constrained")
 gs  = gridspec.GridSpec(1, 2, figure=fig, wspace=0.35)
 fig.suptitle(
     f"OneParse  v{version}  —  Runtime Parsing Benchmark\n"
-    "Flat JSON object  ·  OneParse (HAPI chain) vs Spirit.X3 vs lexy vs strlen",
+    "Flat JSON object  ·  OneParse (HAPI chain) vs PEGTL vs simdjson vs lexy vs Spirit.X3",
     fontsize=12
 )
 
@@ -138,12 +146,16 @@ ax1 = fig.add_subplot(gs[0, 0])
 
 parser_names = [n for n, _ in PARSERS if n != "strlen"]
 x     = list(range(len(DATA_FILES)))
-width = 0.18
+width = 0.15
+# use last row per (parser, input) — handles multiple runs on same day
+latest_rows = {}
+for r in history:
+    latest_rows[(r["parser"], r["input"])] = r
 for i, pname in enumerate(parser_names):
     vals = []
     for fname in DATA_FILES:
-        match = [r for r in rows if r["parser"] == pname and r["input"] == fname]
-        vals.append(match[0]["throughput_mbs"] if match else 0)
+        match = latest_rows.get((pname, fname))
+        vals.append(float(match["throughput_mbs"]) if match else 0)
     offset = (i - (len(parser_names) - 1) / 2) * width
     ax1.bar([xi + offset for xi in x], vals, width,
             label=pname, color=COLORS.get(pname, "blue"), alpha=0.82)
@@ -201,7 +213,7 @@ for fi, fname in enumerate(DATA_FILES):
         ax2.plot(xs_f, ys_f,
                  marker=MARKERS.get(fname, "o"), markersize=5,
                  color="green",
-                 linestyle=["-", "--", ":"][fi],
+                 linestyle=["-", "--", ":", (0,(3,1))][fi],
                  label=fname.replace(".json", ""), zorder=2)
 
 # version labels after data is plotted (ylim is now correct)

@@ -1,0 +1,1 @@
+{"description":"this is a longer string value that should benefit from memchr optimization","author":"environment-controller-main-unit","location":"building-alpha-floor-three-lab-section-b","status":"operational"}

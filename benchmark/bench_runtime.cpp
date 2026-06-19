@@ -11,7 +11,8 @@
 
 // Guard: empty translation unit when compiled without -DPARSER_XXX (e.g. by a library scanner)
 #if defined(PARSER_STRLEN) || defined(PARSER_ONEPARSE) || defined(PARSER_ONEPARSE_NOKEY) \
- || defined(PARSER_SPIRIT) || defined(PARSER_LEXY) || defined(PARSER_ONEPARSE_STREAM)
+ || defined(PARSER_SPIRIT) || defined(PARSER_LEXY) || defined(PARSER_ONEPARSE_STREAM) \
+ || defined(PARSER_PEGTL)  || defined(PARSER_SIMDJSON)
 
 #include <chrono>
 #include <fstream>
@@ -345,6 +346,90 @@ static void parse(const char* s) {
     auto input  = lexy::zstring_input(s);
     auto result = lexy::parse<grammar::object>(input, lexy::noop);
     (void)result;
+}
+
+// ─── PEGTL ─────────────────────────────────────────────────────────────────
+//
+// Template PEG grammar — closest architectural match to OneParse.
+// Keys stored in std::vector<std::string>; values scanned and discarded.
+
+#elif defined(PARSER_PEGTL)
+
+#include <tao/pegtl.hpp>
+#include <vector>
+#include <string>
+
+static const char PARSER_NAME[] = "pegtl";
+
+namespace pegtl = tao::pegtl;
+
+namespace json_grammar {
+    struct str_char  : pegtl::not_one<'"'>             {};
+    struct str_body  : pegtl::star<str_char>            {};
+    struct quoted    : pegtl::seq<pegtl::one<'"'>, str_body, pegtl::one<'"'>> {};
+    struct num_char  : pegtl::sor<pegtl::digit,
+                                  pegtl::one<'-'>, pegtl::one<'+'>, pegtl::one<'.'>> {};
+    struct number    : pegtl::plus<num_char>            {};
+    struct kw_null   : pegtl::string<'n','u','l','l'>   {};
+    struct kw_true   : pegtl::string<'t','r','u','e'>   {};
+    struct kw_false  : pegtl::string<'f','a','l','s','e'> {};
+    struct value     : pegtl::sor<quoted, number, kw_null, kw_true, kw_false> {};
+    struct ws        : pegtl::star<pegtl::space>        {};
+    struct colon     : pegtl::seq<ws, pegtl::one<':'>, ws> {};
+    struct comma     : pegtl::seq<ws, pegtl::one<','>, ws> {};
+    struct member    : pegtl::seq<quoted, colon, value> {};
+    struct members   : pegtl::list<member, comma>       {};
+    struct object    : pegtl::seq<pegtl::one<'{'>, ws,
+                                  pegtl::opt<members>,
+                                  ws, pegtl::one<'}'>>  {};
+    struct grammar   : pegtl::seq<object, pegtl::eof>  {};
+
+    struct state { std::vector<std::string> keys; };
+
+    template<typename Rule> struct action : pegtl::nothing<Rule> {};
+    template<> struct action<str_body> {
+        template<typename Input>
+        static void apply(const Input& in, state& st) {
+            st.keys.emplace_back(in.begin(), in.end());
+        }
+    };
+}
+
+static volatile size_t sink = 0;
+static void parse(const char* s) {
+    json_grammar::state st;
+    pegtl::view_input input(s, s + std::strlen(s));
+    pegtl::parse<json_grammar::grammar, json_grammar::action>(input, st);
+    sink += st.keys.size();
+}
+
+// ─── simdjson ───────────────────────────────────────────────────────────────
+//
+// On-demand API over a pre-padded copy of the input.
+// Parser object reused across calls; padded_string rebuilt each call
+// (reflects real per-parse cost when input arrives fresh).
+
+#elif defined(PARSER_SIMDJSON)
+
+#include "simdjson_src/simdjson.h"
+#include <vector>
+#include <string>
+
+static const char PARSER_NAME[] = "simdjson";
+
+static simdjson::ondemand::parser sj_parser;
+static volatile size_t sink = 0;
+
+static void parse(const char* s) {
+    auto padded = simdjson::padded_string(s, std::strlen(s));
+    auto doc    = sj_parser.iterate(padded);
+    size_t n    = 0;
+    for (auto field : doc.get_object()) {
+        (void)field.key();
+        (void)field.value().raw_json_token();
+        ++n;
+    }
+    sink += n;
 }
 
 #endif // inner parser selection
