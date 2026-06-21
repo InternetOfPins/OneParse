@@ -26,5 +26,9 @@
   "platforms": "*",
   "export": {
     "exclude": ["benchmark", "examples"]
+  },
+  "build": {
+    "includeDir": "include",
+    "srcFilter": ["+<**>", "-<benchmark/>", "-<examples/>", "-<test/>"]
   }
 }
