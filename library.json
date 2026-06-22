@@ -29,6 +29,6 @@
   },
   "build": {
     "includeDir": "include",
-    "srcFilter": ["+<**>", "-<benchmark/>", "-<examples/>", "-<test/>"]
+    "srcFilter": ["+<**>", "-<benchmark/>", "-<examples/>", "-<test/>", "-<.RnD/>"]
   }
 }
