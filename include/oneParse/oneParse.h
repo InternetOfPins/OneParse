@@ -19,12 +19,14 @@ namespace oneParse {
 
   // ── Typed result ──────────────────────────────────────────────────────────────
 
+  /// @brief parser result pair; fst holds first value, snd holds second
   template<typename A, typename B>
   struct Pair { A fst{}; B snd{}; };
 
   struct err_tag {};
   static constexpr err_tag err_v{};
 
+  /// @brief typed parser result: ok flag, parsed value, remaining source, error position
   template<typename T>
   struct Res {
     bool ok{false};
@@ -71,6 +73,7 @@ namespace oneParse {
 
   enum class St : uint8_t { ok, partial, fail };
 
+  /// @brief character-level streaming parse result: ok/partial/fail + matched char
   struct StreamRes {
     St   state;
     char val{0};
@@ -98,6 +101,7 @@ namespace oneParse {
   };
 
   // ── Fixed-capacity array — no heap, MCU-safe ──────────────────────────────────
+  /// @brief fixed-capacity array for MCU-safe parser output accumulation (no heap)
   template<typename T, size_t N>
   struct Arr {
     T      data[N]{};
@@ -116,14 +120,14 @@ namespace oneParse {
   // ── Tag for in-place val transformers (no source advance) ────────────────────
   struct TransformTag {};
 
-  // Mutate<Fn>: Fn(T&) — modify val in-place; position unchanged
+  /// @brief in-place value transformer: calls Fn(val&), position unchanged
   template<auto Fn>
   struct Mutate : TransformTag {
     template<typename T>
     static void apply(T& v) { Fn(v); }
   };
 
-  // Trans<Fn>: val = Fn(val) — same-type transform; position unchanged
+  /// @brief value transform: val = Fn(val), same type, position unchanged
   template<auto Fn>
   struct Trans : TransformTag {
     template<typename T>
@@ -142,6 +146,7 @@ namespace oneParse {
 
   struct FromTag {};
 
+  /// @brief embeds a compile-time source buffer; enables zero-arg ParseDef::run()
   template<const char* Buf>
   struct From : FromTag {
     static constexpr const char* source = Buf;
@@ -149,6 +154,7 @@ namespace oneParse {
 
   // ── Single-char stateless ─────────────────────────────────────────────────────
 
+  /// @brief matches exactly the character q; fails on any other input
   template<char q>
   struct Char {
     template<typename O> struct Part : O {
@@ -166,6 +172,7 @@ namespace oneParse {
     }
   };
 
+  /// @brief matches characters in [a, b] inclusive
   template<char a, char b>
   struct Range {
     template<typename O> struct Part : O {
@@ -183,6 +190,7 @@ namespace oneParse {
     }
   };
 
+  /// @brief matches any one of the listed characters
   template<char... CC>
   struct AnyOf {
     template<typename O> struct Part : O {
@@ -200,6 +208,7 @@ namespace oneParse {
     }
   };
 
+  /// @brief matches any character where F(c) is true
   template<bool(*F)(char)>
   struct Satisfy {
     template<typename O> struct Part : O {
@@ -217,6 +226,7 @@ namespace oneParse {
     }
   };
 
+  /// @brief matches any single non-null character
   struct Any {
     template<typename O> struct Part : O {
       using Base=O; using Base::Base; using Base::put;
@@ -235,6 +245,7 @@ namespace oneParse {
 
   // ── Single-char combinators ───────────────────────────────────────────────────
 
+  /// @brief ordered alternation: succeeds if any PP matches; tries left to right
   template<typename... PP>
   struct Or {
     template<typename O> struct Part : O {
@@ -256,6 +267,7 @@ namespace oneParse {
     }
   };
 
+  /// @brief character intersection: succeeds only if all PP match the same character
   template<typename... PP>
   struct And {
     template<typename O> struct Part : O {
@@ -277,6 +289,7 @@ namespace oneParse {
     }
   };
 
+  /// @brief negation: matches any character that P does NOT match
   template<typename P>
   struct Not {
     template<typename O> struct Part : O {
