@@ -920,6 +920,27 @@ namespace oneParse {
     }
   };
 
+  // SepBy<P,Sep,N> — P separated by Sep, 0 or more, into Arr<P::ValType,N>
+  //   Always succeeds; empty list if first P fails.
+  template<typename P, typename Sep, size_t N>
+  struct SepBy {
+    using ValType = Arr<typename P::ValType, N>;
+
+    static Res<ValType> run(Src s) {
+      ValType arr{};
+      auto r = P::run(s);
+      if (!r.ok) return {true, arr, s};  // zero matches: ok, empty
+      arr.push(r.val); s = r.rest;
+      while (true) {
+        auto sep = Sep::run(s); if (!sep.ok) break;
+        auto r2  = P::run(sep.rest); if (!r2.ok) break;
+        if (!arr.push(r2.val)) break;
+        s = r2.rest;
+      }
+      return {true, arr, s};
+    }
+  };
+
   // ManyTill<P,End> — consume P* until End matches (peek; End not consumed)
   template<typename P, typename End>
   struct ManyTill : ZeroWidthTag {
