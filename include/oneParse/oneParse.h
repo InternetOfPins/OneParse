@@ -6,6 +6,9 @@
 #include <cstring>
 #include <tuple>
 #include <type_traits>
+#if defined(__SSE2__) || defined(__AVX2__)
+  #include <immintrin.h>
+#endif
 #include <hapi/hapi.h>
 #include <oneOutput/oneOutput.h>
 using hapi::APIOf;
@@ -175,6 +178,10 @@ namespace oneParse {
   /// @brief matches characters in [a, b] inclusive
   template<char a, char b>
   struct Range {
+    static_assert(a <= b, "Range<a,b>: requires a<=b -- chk() already assumes an "
+                           "ascending range, and the SIMD run_n wraparound trick "
+                           "(span=b-a as unsigned) silently matches everything "
+                           "instead of nothing for an inverted range.");
     template<typename O> struct Part : O {
       using Base=O; using Base::Base; using Base::put;
       static constexpr bool chk(char c) { return a<=c&&c<=b; }
@@ -182,6 +189,74 @@ namespace oneParse {
         if (chk(c)) { put(c); return StreamRes::Ok(c); }
         return StreamRes::Fail();
       }
+      // bulk: SIMD range scan (SSE2/AVX2) where the compiler has that ISA; every
+      // other target (MCU or otherwise) still gets run_n, just the plain per-char
+      // path below -- same API everywhere, no target is left without a bulk path.
+      // The two-arg bulk put() is only ever called from inside the SIMD branch,
+      // which only exists where __SSE2__/__AVX2__ are defined (x86 hosts) -- AVR-GCC
+      // / arm-none-eabi-gcc / xtensa-esp32-elf-gcc never define these, so those
+      // targets never instantiate a put(ptr,len) call, even though some of their
+      // output backends (e.g. UartOut) don't implement that overload.
+#if !defined(ONE_PARSE_RANGE_TIGHT_LOOP) && (defined(__SSE2__) || defined(__AVX2__))
+      size_t run_n(const char* s, size_t n) {
+        size_t i = 0;
+        constexpr unsigned char lo   = (unsigned char)a;
+        constexpr unsigned char span = (unsigned char)(b - a);
+#if defined(__AVX2__)
+        {
+          const __m256i vlo   = _mm256_set1_epi8((char)lo);
+          const __m256i vspan = _mm256_set1_epi8((char)span);
+          for (; i + 32 <= n; i += 32) {
+            __m256i v    = _mm256_loadu_si256((const __m256i*)(s + i));
+            __m256i t    = _mm256_sub_epi8(v, vlo);
+            __m256i diff = _mm256_subs_epu8(t, vspan);
+            unsigned mask = (unsigned)_mm256_movemask_epi8(
+                               _mm256_cmpeq_epi8(diff, _mm256_setzero_si256()));
+            if (mask != 0xFFFFFFFFu) {
+              unsigned run = (unsigned)__builtin_ctz(~mask);
+              if (run) put(s + i, run);
+              return i + run;
+            }
+            put(s + i, 32);
+          }
+        }
+#endif
+#if defined(__SSE2__)
+        {
+          const __m128i vlo   = _mm_set1_epi8((char)lo);
+          const __m128i vspan = _mm_set1_epi8((char)span);
+          for (; i + 16 <= n; i += 16) {
+            __m128i v    = _mm_loadu_si128((const __m128i*)(s + i));
+            __m128i t    = _mm_sub_epi8(v, vlo);
+            __m128i diff = _mm_subs_epu8(t, vspan);
+            unsigned mask = (unsigned)_mm_movemask_epi8(
+                               _mm_cmpeq_epi8(diff, _mm_setzero_si128())) & 0xFFFFu;
+            if (mask != 0xFFFFu) {
+              unsigned run = (unsigned)__builtin_ctz((~mask) & 0xFFFFu);
+              if (run) put(s + i, run);
+              return i + run;
+            }
+            put(s + i, 16);
+          }
+        }
+#endif
+        // remainder shorter than one vector: plain per-char loop. A scan-then-
+        // bulk-put here measured ~0.56x (slower) on isolated short fields --
+        // the common real case for Digit (1-5 digit JSON numbers never reach
+        // the 16/32-byte vector stages at all) -- so this stays char-by-char.
+        while (i < n && chk(s[i])) { put(s[i]); ++i; }
+        return i;
+      }
+#else
+      // ONE_PARSE_RANGE_TIGHT_LOOP, or no SSE2/AVX2 at all (MCU targets): portable
+      // per-char path -- auto-vectorized by compiler at -O3 where it can. Never
+      // calls the two-arg put(), so it works on every backend unconditionally.
+      size_t run_n(const char* s, size_t n) {
+        size_t i = 0;
+        while (i < n && chk(s[i])) { put(s[i]); ++i; }
+        return i;
+      }
+#endif
     };
     static constexpr bool chk(char c) { return a<=c&&c<=b; }
     static Res<char> run(Src s) {

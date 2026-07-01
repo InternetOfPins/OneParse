@@ -14,6 +14,7 @@
 #include <cassert>
 #include <cstring>
 #include <iostream>
+#include <random>
 #include <string>
 
 using namespace oneParse;
@@ -155,6 +156,46 @@ static void test_meta_mixed_body() {
     assert(r1 == r2            && "mixed: run_n vs char mismatch");
 }
 
+// ── Range<a,b> — SIMD bulk scan correctness (fuzzed) ──────────────────────────
+// Regression check for the SSE2/AVX2 run_n path: exercises the two-arg bulk
+// put() (needs a sink that actually implements it, unlike Sink above), full
+// byte range (including >127, i.e. negative char), and randomized start
+// offsets/lengths to hit every SIMD alignment/tail boundary.
+
+struct Collect {
+    std::string out;
+    void put(char c) { out.push_back(c); }
+    void put(const char* s, size_t n) { out.append(s, n); }
+};
+
+template<char a, char b>
+static size_t ref_range_run_n(const char* s, size_t n, std::string& out) {
+    size_t i = 0;
+    while (i < n && a <= s[i] && s[i] <= b) { out.push_back(s[i]); ++i; }
+    return i;
+}
+
+template<char a, char b>
+static void test_range_fuzz(unsigned seed, int trials) {
+    std::mt19937 rng(seed);
+    for (int trial = 0; trial < trials; ++trial) {
+        int len = (int)(rng() % 80) + 1;
+        std::string s;
+        for (int i = 0; i < len; ++i) s.push_back((char)(rng() % 256));
+        int start = (int)(rng() % (unsigned)len);   // vary start to hit every alignment/tail case
+        std::string sub = s.substr((size_t)start);
+
+        std::string expOut;
+        size_t exp = ref_range_run_n<a,b>(sub.c_str(), sub.size(), expOut);
+
+        typename Range<a,b>::template Part<Collect> p{};
+        size_t got = p.run_n(sub.c_str(), sub.size());
+
+        assert(got == exp && "Range run_n: wrong count");
+        assert(p.out == expOut && "Range run_n: wrong bytes");
+    }
+}
+
 // ── runner ────────────────────────────────────────────────────────────────────
 
 void doStreamTests() {
@@ -182,6 +223,13 @@ void doStreamTests() {
 
     std::cout << "TinyAlt<5> (linear path):\n";
     test_alt_impl<TinyAltP>("TinyAlt");
+    std::cout << "  ok\n";
+
+    std::cout << "Range<a,b> SIMD bulk scan (fuzzed, 50000 trials x 4 ranges):\n";
+    test_range_fuzz<'0','9'>(1234, 50000);              // digits -- Range's most common real use
+    test_range_fuzz<'a','z'>(1234, 50000);               // lowercase alpha
+    test_range_fuzz<0,0>(1234, 50000);                   // degenerate: a==b
+    test_range_fuzz<(char)-128,(char)127>(1234, 50000);  // full valid range, span=255 edge
     std::cout << "  ok\n";
 
     std::cout << "all streaming tests passed\n";
