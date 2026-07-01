@@ -12,6 +12,7 @@
 // Guard: empty translation unit when compiled without -DPARSER_XXX (e.g. by a library scanner)
 #if defined(PARSER_STRLEN) || defined(PARSER_ONEPARSE) || defined(PARSER_ONEPARSE_NOKEY) \
  || defined(PARSER_SPIRIT) || defined(PARSER_LEXY) || defined(PARSER_ONEPARSE_STREAM) \
+ || defined(PARSER_ONEPARSE_INDEX) \
  || defined(PARSER_PEGTL)  || defined(PARSER_SIMDJSON)
 
 #include <chrono>
@@ -251,6 +252,121 @@ using P = ParseDef<JsonObj, NullOut>;
 static volatile uint32_t sink = 0;
 static void parse(const char* s) {
     P p;
+    sink += (uint32_t)p.run_n(s, std::strlen(s));
+}
+
+// ─── OneParse two-stage structural-index scan (opt-in benchmark experiment) ──
+//
+// simdjson-style scan for this one grammar: stage 1 makes a single pass over
+// the whole buffer recording structural byte offsets ({ } : , and quote
+// pairs); stage 2 walks that offset list instead of driving a char-by-char
+// phase state machine. Built as a real HAPI component (Part<O> shape, drop-in
+// via ParseDef<JsonObjIndexed, NullOut> — identical usage to JsonObj above)
+// so it composes the same way, not a parallel architecture. JsonObj and the
+// rest of the streaming ::Part machinery are untouched by this.
+//
+// Known simplification vs JsonObj: unquoted value bodies (numbers/keywords)
+// are treated as "whatever's between two structural offsets" without
+// verifying they match null/true/false/a number — fine for a scan-only
+// benchmark (nothing is validated or extracted either way), not something to
+// promote into oneParse.h as-is.
+//
+// Toy-scale bound: Arr<uint16_t,64> caps input at 64KB / ~16 flat-object
+// members — sized for these 4 benchmark files, not production-ready.
+
+#elif defined(PARSER_ONEPARSE_INDEX)
+
+#include <oneParse/oneParse.h>
+#include <oneOutput/oneOutput.h>
+#include <cstring>
+#include <array>
+using namespace oneParse;
+
+static const char PARSER_NAME[] = "op-index";
+
+struct NullOut {
+    template<typename O> struct Part : O {
+        using Base=O; using Base::Base;
+        void put(char) {}
+    };
+};
+
+namespace idx_detail {
+    inline constexpr std::array<bool,256> make_structural_table() {
+        std::array<bool,256> t{};
+        for (unsigned char c : {'{','}',':',',','"'}) t[c] = true;
+        return t;
+    }
+    static constexpr auto is_structural = make_structural_table();
+
+    // Stage 1: one linear pass — record structural byte offsets. Quote opens
+    // get their closing quote found via memchr (same technique as
+    // detail::is_quoted_string's bulk path in oneParse.h) and both offsets
+    // are pushed, so a string span is always two consecutive index entries.
+    inline size_t scan(const char* s, size_t n, Arr<uint16_t,64>& idx) {
+        size_t i = 0;
+        while (i < n) {
+            while (i < n && !is_structural[(unsigned char)s[i]]) ++i;
+            if (i >= n) break;
+            idx.push((uint16_t)i);
+            if (s[i] == '"') {
+                const char* end = (const char*)memchr(s+i+1, '"', n-i-1);
+                i = end ? (size_t)(end - s) : n;
+                idx.push((uint16_t)i);
+            }
+            ++i;
+        }
+        return idx.len;
+    }
+
+    // Stage 2: walk the index — same flat {"key":val, ...} grammar as JsonObj.
+    // On success, `end` is set to one past the closing '}' (matches JsonObj's
+    // run_n, which also stops at '}' rather than consuming trailing bytes).
+    inline bool walk(const char* s, const Arr<uint16_t,64>& idx, size_t& end) {
+        size_t k = 0;
+        if (idx.len == 0 || s[idx.data[0]] != '{') return false;
+        ++k;
+        if (k < idx.len && s[idx.data[k]] == '}') { end = idx.data[k]+1; return true; }
+        while (true) {
+            if (k+1 >= idx.len || s[idx.data[k]] != '"') return false;
+            k += 2; // key: opening + closing quote offsets
+            if (k >= idx.len || s[idx.data[k]] != ':') return false;
+            ++k;
+            if (k < idx.len && s[idx.data[k]] == '"') {
+                if (k+1 >= idx.len) return false;
+                k += 2; // string value: opening + closing quote offsets
+            }
+            // else: unquoted value (number/keyword) is the implicit gap up
+            // to the next structural offset — nothing indexed, nothing to walk.
+            if (k >= idx.len) return false;
+            char c = s[idx.data[k]];
+            if (c == ',') { ++k; continue; }
+            if (c == '}') { end = idx.data[k]+1; return true; }
+            return false;
+        }
+    }
+} // namespace idx_detail
+
+struct JsonObjIndexed {
+    template<typename O> struct Part : O {
+        using Base=O; using Base::Base;
+
+        size_t run_n(const char* s, size_t n) {
+            Arr<uint16_t,64> idx{};
+            idx_detail::scan(s, n, idx);
+            size_t end = 0;
+            return idx_detail::walk(s, idx, end) ? end : 0;
+        }
+        // run_n-only component: char-by-char path unused by this benchmark.
+        StreamRes run(char) { return StreamRes::Fail(); }
+    };
+};
+
+using PIdx = ParseDef<JsonObjIndexed, NullOut>;
+
+static volatile uint32_t sink = 0;
+static void parse(const char* s) {
+    PIdx p;
     sink += (uint32_t)p.run_n(s, std::strlen(s));
 }
 

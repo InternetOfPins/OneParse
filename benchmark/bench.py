@@ -40,8 +40,12 @@ CSV_FIELDS = ["date", "version", "parser", "input",
 
 PARSERS = [
     ("strlen",    ["-std=c++17", "-DPARSER_STRLEN"]),
-    ("oneParse",  ["-std=c++17", "-DPARSER_ONEPARSE_STREAM",
+    ("oneParse",  ["-std=c++17", "-DPARSER_ONEPARSE_INDEX",
                    f"-I{OP_INC}", f"-I{HAPI_INC}", f"-I{OUT_INC}"]),
+    # previous streaming (JsonObj/Meta/Alt) implementation — kept in
+    # bench_runtime.cpp for reference, no longer the reported "oneParse" row
+    # ("oneParse-stream", ["-std=c++17", "-DPARSER_ONEPARSE_STREAM",
+    #                f"-I{OP_INC}", f"-I{HAPI_INC}", f"-I{OUT_INC}"]),
     # old pointer-based API — needs full rewrite to re-enable
     # ("oneParse",  ["-std=c++17", "-DPARSER_ONEPARSE",  ...]),
     # ("op-nokey",  ["-std=c++17", "-DPARSER_ONEPARSE_NOKEY", ...]),
