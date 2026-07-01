@@ -188,14 +188,23 @@ width = 0.15
 latest_rows = {}
 for r in history:
     latest_rows[(r["parser"], r["input"])] = r
+
+# grammar-combinator frameworks (grammar compiled specifically for THIS
+# benchmark's flat-object shape) vs simdjson (dedicated, general-purpose,
+# hand-tuned JSON parser) — hatch the combinator bars so the two categories
+# are visually distinct, not just disclosed in a caption nobody reads.
+COMBINATOR_PARSERS = {"lexy", "pegtl", "oneParse", "spirit.x3"}
+
 for i, pname in enumerate(parser_names):
     vals = []
     for fname in DATA_FILES:
         match = latest_rows.get((pname, fname))
         vals.append(float(match["throughput_mbs"]) if match else 0)
     offset = (i - (len(parser_names) - 1) / 2) * width
+    hatch = "oo" if pname == "simdjson" else None
     ax1.bar([xi + offset for xi in x], vals, width,
-            label=pname, color=COLORS.get(pname, "blue"), alpha=0.82)
+            label=(f"{pname}  (SIMD)" if pname == "simdjson" else pname),
+            color=COLORS.get(pname, "blue"), alpha=0.82, hatch=hatch)
 
 ax1.set_title("Throughput by input size  (higher is faster)")
 ax1.set_xlabel("Input")
@@ -204,6 +213,11 @@ ax1.set_xticks(x)
 ax1.set_xticklabels([f.replace(".json", "") for f in DATA_FILES])
 ax1.legend()
 ax1.grid(axis="y", alpha=0.5)
+ax1.text(0.5, -0.14,
+          "lexy, PEGTL, oneParse, and Spirit.X3 are grammar-combinator frameworks — each parser is compiled from a\n"
+          "grammar definition specific to this benchmark, not a general-purpose library. Circled bar (simdjson) is\n"
+          "a dedicated, hand-tuned, SIMD-accelerated JSON parser — not a like-for-like comparison.",
+          transform=ax1.transAxes, ha="center", va="top", fontsize=8, color="#555555", style="italic")
 
 # Panel right: OneParse throughput — every individual bench.py run as a point
 ax2 = fig.add_subplot(gs[0, 1])

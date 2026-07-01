@@ -10,11 +10,16 @@ HISTORY_CSV = os.path.join(BENCH_DIR, "results", "history.csv")
 CHART_OUT   = os.path.join(BENCH_DIR, "bench_runtime.png")
 LIBRARY_JSON= os.path.join(BENCH_DIR, "..", "library.json")
 
-DATA_FILES  = ["small.json", "medium.json", "large.json"]
-COLORS      = {"oneParse": "green", "op-nokey": "limegreen",
-               "spirit.x3": "red", "strlen": "gray", "lexy": "steelblue",
-               "op-stream": "green"}
-MARKERS     = {"small.json": "o", "medium.json": "s", "large.json": "^"}
+DATA_FILES = ["small.json", "medium.json", "large.json", "longstr.json"]
+COLORS = {"oneParse": "green", "op-nokey": "limegreen",
+          "spirit.x3": "red", "strlen": "gray", "lexy": "steelblue",
+          "pegtl": "darkorange", "simdjson": "purple"}
+MARKERS = {"small.json": "o", "medium.json": "s", "large.json": "^", "longstr.json": "D"}
+
+# grammar-combinator frameworks (grammar compiled specifically for THIS
+# benchmark's flat-object shape) vs simdjson (dedicated, general-purpose,
+# hand-tuned, SIMD-accelerated JSON parser).
+COMBINATOR_PARSERS = {"lexy", "pegtl", "oneParse", "spirit.x3"}
 
 with open(LIBRARY_JSON) as f:
     version = json.load(f)["version"]
@@ -37,23 +42,25 @@ fig = plt.figure(figsize=(18, 7), layout="constrained")
 gs  = gridspec.GridSpec(1, 2, figure=fig, wspace=0.35)
 fig.suptitle(
     f"OneParse  v{version}  —  Runtime Parsing Benchmark\n"
-    "Flat JSON object  ·  OneParse (HAPI chain) vs Spirit.X3 vs lexy vs strlen",
+    "Flat JSON object  ·  OneParse (HAPI chain) vs PEGTL vs simdjson vs lexy vs Spirit.X3",
     fontsize=12
 )
 
 # Panel left: current throughput bar chart
 ax1 = fig.add_subplot(gs[0, 0])
-parser_names = sorted({r["parser"] for r in latest_rows if r["parser"] != "strlen"})
+parser_names = ["lexy", "pegtl", "oneParse", "simdjson", "spirit.x3"]
 x     = list(range(len(DATA_FILES)))
-width = 0.18
+width = 0.15
 for i, pname in enumerate(parser_names):
     vals = []
     for fname in DATA_FILES:
         match = [r for r in latest_rows if r["parser"] == pname and r["input"] == fname]
         vals.append(float(match[0]["throughput_mbs"]) if match else 0)
     offset = (i - (len(parser_names) - 1) / 2) * width
+    hatch = "oo" if pname == "simdjson" else None
     ax1.bar([xi + offset for xi in x], vals, width,
-            label=pname, color=COLORS.get(pname, "blue"), alpha=0.82)
+            label=(f"{pname}  (SIMD)" if pname == "simdjson" else pname),
+            color=COLORS.get(pname, "blue"), alpha=0.82, hatch=hatch)
 
 ax1.set_title("Throughput by input size  (higher is faster)")
 ax1.set_xlabel("Input")
@@ -62,6 +69,11 @@ ax1.set_xticks(x)
 ax1.set_xticklabels([f.replace(".json", "") for f in DATA_FILES])
 ax1.legend()
 ax1.grid(axis="y", alpha=0.5)
+ax1.text(0.5, -0.14,
+          "lexy, PEGTL, oneParse, and Spirit.X3 are grammar-combinator frameworks — each parser is compiled from a\n"
+          "grammar definition specific to this benchmark, not a general-purpose library. Circled bar (simdjson) is\n"
+          "a dedicated, hand-tuned, SIMD-accelerated JSON parser — not a like-for-like comparison.",
+          transform=ax1.transAxes, ha="center", va="top", fontsize=8, color="#555555", style="italic")
 
 # Panel right: every individual bench.py run as a point
 ax2 = fig.add_subplot(gs[0, 1])
@@ -104,7 +116,7 @@ for fi, fname in enumerate(DATA_FILES):
         ax2.plot(xs_f, ys_f,
                  marker=MARKERS.get(fname, "o"), markersize=5,
                  color="green",
-                 linestyle=["-", "--", ":"][fi],
+                 linestyle=["-", "--", ":", (0,(3,1))][fi],
                  label=fname.replace(".json", ""), zorder=2)
 
 for i, (ver, (lo, hi)) in enumerate(sorted(ver_spans.items())):
