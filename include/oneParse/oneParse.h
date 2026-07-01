@@ -1021,10 +1021,30 @@ namespace oneParse {
     }
   } // namespace detail
 
+  // TypedTerminal/TypedStep — real HAPI Chain<>::Part composition for TypedDef's
+  // dispatch, mirroring the Mutate/Trans/Ref mono_block idiom in hapi/run.h:
+  // each Comp becomes a component whose Part<O>::step() runs itself then
+  // chains into Base::step(), instead of folding detail::runComp by hand.
+  template<typename T>
+  struct TypedTerminal {
+    static bool step(Src&, T&, Src&) { return true; }
+  };
+
+  template<typename Comp, typename T>
+  struct TypedStep {
+    template<typename O> struct Part : O {
+      using Base = O; using Base::Base;
+      static bool step(Src& s, T& val, Src& err) {
+        return detail::runComp<T, Comp>(s, val, err) && Base::step(s, val, err);
+      }
+    };
+  };
+
   template<typename T, typename... Comps>
   struct TypedDef {
     using ValType = T;
     using Types   = Chain<ParseAPI<>, Comps...>;   // HAPI introspection
+    using Exec    = typename Chain<TypedStep<Comps,T>...>::template Part<TypedTerminal<T>>;
 
     template<template<typename...> class W> using Build = W<Comps...>;
     template<typename... XX> using App = TypedDef<T, XX..., Comps...>;
@@ -1034,7 +1054,7 @@ namespace oneParse {
       T val{};
       Src start = s;
       Src err   = nullptr;
-      bool ok = (detail::runComp<T, Comps>(s, val, err) && ...);
+      bool ok = Exec::step(s, val, err);
       if (!ok) return Res<T>(false, T{}, start, err);
       return Res<T>(true, val, s);
     }
