@@ -793,19 +793,31 @@ namespace oneParse {
   };
 
   // Skip<Comps...> — run all comps, discard result (zero-width)
-  template<typename... Comps>
-  struct Skip : ZeroWidthTag {
-    static Res<char> run(Src s) {
-      const char* start = s;
-      char dummy{};
-      bool ok = true;
-      ((ok = ok && ([&]() -> bool {
-        auto r = Comps::run(s);
+  // SkipTerminal/SkipStep: same Chain<>::Part composition as TypedStep,
+  // scoped down to position-only (no val to carry) since Skip discards results.
+  struct SkipTerminal {
+    static bool step(Src&) { return true; }
+  };
+
+  template<typename Comp>
+  struct SkipStep {
+    template<typename O> struct Part : O {
+      using Base = O; using Base::Base;
+      static bool step(Src& s) {
+        auto r = Comp::run(s);
         if (!r.ok) return false;
         s = r.rest;
-        return true;
-      }())) && ...);
-      if (!ok) return {false, '\0', start, start};
+        return Base::step(s);
+      }
+    };
+  };
+
+  template<typename... Comps>
+  struct Skip : ZeroWidthTag {
+    using Exec = typename Chain<SkipStep<Comps>...>::template Part<SkipTerminal>;
+    static Res<char> run(Src s) {
+      const char* start = s;
+      if (!Exec::step(s)) return {false, '\0', start, start};
       return {true, '\0', s};
     }
   };
