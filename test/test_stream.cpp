@@ -196,6 +196,61 @@ static void test_range_fuzz(unsigned seed, int trials) {
     }
 }
 
+// ── JsonNum = String<Or<Digit,Sign,Char<'.'>>> — run_n correctness (fuzzed) ──
+// General regression coverage for JsonNum's run_n (currently the plain tight
+// loop -- a digit-run fast path via range_scan_n was tried and reverted, see
+// the note on String::Part::run_n). Mixes digit runs with sign/dot chars,
+// including "-3.14"-shaped input: a case that would silently mis-parse if this
+// were ever routed through Alt<>'s commit-to-one-alternative semantics instead
+// of Or<>'s per-char union (Alt would commit to Sign on '-' and then fail on
+// the following digit) -- kept as a guard against that mistake resurfacing.
+
+static size_t ref_jsonnum_run_n(const char* s, size_t n, std::string& out) {
+    auto chk = [](char c){ return (c>='0'&&c<='9') || c=='-' || c=='+' || c=='.'; };
+    size_t i = 0;
+    while (i < n && chk(s[i])) { out.push_back(s[i]); ++i; }
+    return i;
+}
+
+static void test_jsonnum_fuzz(unsigned seed, int trials) {
+    std::mt19937 rng(seed);
+    static const char alphabet[] = "0000000000123456789+-.xyz, "; // digit-heavy, like real numbers
+    for (int trial = 0; trial < trials; ++trial) {
+        int len = (int)(rng() % 100) + 1;   // up to 100 -- crosses the 16/32-byte vector stages
+        std::string s;
+        for (int i = 0; i < len; ++i) s.push_back(alphabet[rng() % (sizeof(alphabet) - 1)]);
+
+        std::string expOut;
+        size_t exp = ref_jsonnum_run_n(s.c_str(), s.size(), expOut);
+
+        typename JsonNum::template Part<Collect> p{};
+        size_t got = p.run_n(s.c_str(), s.size());
+
+        assert(got == exp && "JsonNum run_n: wrong count");
+        assert(p.out == expOut && "JsonNum run_n: wrong bytes");
+    }
+}
+
+static void test_jsonnum_cases() {
+    static const char* CASES[] = {
+        "-3.14", "42", "+7", "0.001", "-0", "3.", ".5",
+        "123456789012345678901234567890123456789", // > 1 AVX2 vector of pure digits
+        "-123456789012345678901234567890123456789.987654321",
+    };
+    for (auto* in : CASES) {
+        size_t n = std::strlen(in);
+        std::string expOut;
+        size_t exp = ref_jsonnum_run_n(in, n, expOut);
+        typename JsonNum::template Part<Collect> p{};
+        size_t got = p.run_n(in, n);
+        if (got != exp || p.out != expOut) {
+            std::cerr << "JsonNum case \"" << in << "\": expected=" << exp
+                       << " got=" << got << "\n";
+            assert(false);
+        }
+    }
+}
+
 // ── runner ────────────────────────────────────────────────────────────────────
 
 void doStreamTests() {
@@ -230,6 +285,11 @@ void doStreamTests() {
     test_range_fuzz<'a','z'>(1234, 50000);               // lowercase alpha
     test_range_fuzz<0,0>(1234, 50000);                   // degenerate: a==b
     test_range_fuzz<(char)-128,(char)127>(1234, 50000);  // full valid range, span=255 edge
+    std::cout << "  ok\n";
+
+    std::cout << "JsonNum run_n correctness (fixed cases + fuzzed, 50000 trials):\n";
+    test_jsonnum_cases();
+    test_jsonnum_fuzz(4321, 50000);
     std::cout << "  ok\n";
 
     std::cout << "all streaming tests passed\n";

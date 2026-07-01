@@ -175,6 +175,76 @@ namespace oneParse {
     }
   };
 
+  namespace detail {
+    // Shared bulk char-range scanner: consumes chars in [a,b] from s[0..n),
+    // writing matched bytes to self.put(...). Used by Range<a,b>::Part::run_n.
+    // (Also tried wrapping String<Or<Range<a,b>,Rest...>> bodies -- e.g. JSON's
+    // Or<Digit,Sign,Char<'.'>> -- around this; reverted, see the note on
+    // String::Part::run_n: per-call overhead doesn't amortize over JSON's
+    // typical 1-12 digit field width.)
+    //
+    // Only ever declared with a live SIMD body where the compiler has already
+    // defined __SSE2__/__AVX2__ (x86 hosts). AVR-GCC / arm-none-eabi-gcc /
+    // xtensa-esp32-elf-gcc never define these, so on every small-MCU target
+    // this falls straight to the plain per-char loop -- same API everywhere,
+    // no target is left without a working bulk path. The two-arg bulk put()
+    // is only ever called from inside the SIMD branch, so it's never reachable
+    // on MCU output backends (e.g. UartOut) that don't implement that overload.
+    template<char a, char b, typename Self>
+    size_t range_scan_n(Self& self, const char* s, size_t n) {
+      size_t i = 0;
+#if !defined(ONE_PARSE_RANGE_TIGHT_LOOP) && (defined(__SSE2__) || defined(__AVX2__))
+      constexpr unsigned char lo   = (unsigned char)a;
+      constexpr unsigned char span = (unsigned char)(b - a);
+#if defined(__AVX2__)
+      {
+        const __m256i vlo   = _mm256_set1_epi8((char)lo);
+        const __m256i vspan = _mm256_set1_epi8((char)span);
+        for (; i + 32 <= n; i += 32) {
+          __m256i v    = _mm256_loadu_si256((const __m256i*)(s + i));
+          __m256i t    = _mm256_sub_epi8(v, vlo);
+          __m256i diff = _mm256_subs_epu8(t, vspan);
+          unsigned mask = (unsigned)_mm256_movemask_epi8(
+                             _mm256_cmpeq_epi8(diff, _mm256_setzero_si256()));
+          if (mask != 0xFFFFFFFFu) {
+            unsigned run = (unsigned)__builtin_ctz(~mask);
+            if (run) self.put(s + i, run);
+            return i + run;
+          }
+          self.put(s + i, 32);
+        }
+      }
+#endif
+#if defined(__SSE2__)
+      {
+        const __m128i vlo   = _mm_set1_epi8((char)lo);
+        const __m128i vspan = _mm_set1_epi8((char)span);
+        for (; i + 16 <= n; i += 16) {
+          __m128i v    = _mm_loadu_si128((const __m128i*)(s + i));
+          __m128i t    = _mm_sub_epi8(v, vlo);
+          __m128i diff = _mm_subs_epu8(t, vspan);
+          unsigned mask = (unsigned)_mm_movemask_epi8(
+                             _mm_cmpeq_epi8(diff, _mm_setzero_si128())) & 0xFFFFu;
+          if (mask != 0xFFFFu) {
+            unsigned run = (unsigned)__builtin_ctz((~mask) & 0xFFFFu);
+            if (run) self.put(s + i, run);
+            return i + run;
+          }
+          self.put(s + i, 16);
+        }
+      }
+#endif
+#endif
+      // remainder shorter than one vector (or no SIMD ISA at all): plain
+      // per-char loop. A scan-then-bulk-put here measured ~0.56x (slower) on
+      // isolated short fields -- the common real case for Digit (1-5 digit
+      // JSON numbers never reach the 16/32-byte vector stages at all) -- so
+      // this stays char-by-char.
+      while (i < n && a <= s[i] && s[i] <= b) { self.put(s[i]); ++i; }
+      return i;
+    }
+  }
+
   /// @brief matches characters in [a, b] inclusive
   template<char a, char b>
   struct Range {
@@ -189,74 +259,7 @@ namespace oneParse {
         if (chk(c)) { put(c); return StreamRes::Ok(c); }
         return StreamRes::Fail();
       }
-      // bulk: SIMD range scan (SSE2/AVX2) where the compiler has that ISA; every
-      // other target (MCU or otherwise) still gets run_n, just the plain per-char
-      // path below -- same API everywhere, no target is left without a bulk path.
-      // The two-arg bulk put() is only ever called from inside the SIMD branch,
-      // which only exists where __SSE2__/__AVX2__ are defined (x86 hosts) -- AVR-GCC
-      // / arm-none-eabi-gcc / xtensa-esp32-elf-gcc never define these, so those
-      // targets never instantiate a put(ptr,len) call, even though some of their
-      // output backends (e.g. UartOut) don't implement that overload.
-#if !defined(ONE_PARSE_RANGE_TIGHT_LOOP) && (defined(__SSE2__) || defined(__AVX2__))
-      size_t run_n(const char* s, size_t n) {
-        size_t i = 0;
-        constexpr unsigned char lo   = (unsigned char)a;
-        constexpr unsigned char span = (unsigned char)(b - a);
-#if defined(__AVX2__)
-        {
-          const __m256i vlo   = _mm256_set1_epi8((char)lo);
-          const __m256i vspan = _mm256_set1_epi8((char)span);
-          for (; i + 32 <= n; i += 32) {
-            __m256i v    = _mm256_loadu_si256((const __m256i*)(s + i));
-            __m256i t    = _mm256_sub_epi8(v, vlo);
-            __m256i diff = _mm256_subs_epu8(t, vspan);
-            unsigned mask = (unsigned)_mm256_movemask_epi8(
-                               _mm256_cmpeq_epi8(diff, _mm256_setzero_si256()));
-            if (mask != 0xFFFFFFFFu) {
-              unsigned run = (unsigned)__builtin_ctz(~mask);
-              if (run) put(s + i, run);
-              return i + run;
-            }
-            put(s + i, 32);
-          }
-        }
-#endif
-#if defined(__SSE2__)
-        {
-          const __m128i vlo   = _mm_set1_epi8((char)lo);
-          const __m128i vspan = _mm_set1_epi8((char)span);
-          for (; i + 16 <= n; i += 16) {
-            __m128i v    = _mm_loadu_si128((const __m128i*)(s + i));
-            __m128i t    = _mm_sub_epi8(v, vlo);
-            __m128i diff = _mm_subs_epu8(t, vspan);
-            unsigned mask = (unsigned)_mm_movemask_epi8(
-                               _mm_cmpeq_epi8(diff, _mm_setzero_si128())) & 0xFFFFu;
-            if (mask != 0xFFFFu) {
-              unsigned run = (unsigned)__builtin_ctz((~mask) & 0xFFFFu);
-              if (run) put(s + i, run);
-              return i + run;
-            }
-            put(s + i, 16);
-          }
-        }
-#endif
-        // remainder shorter than one vector: plain per-char loop. A scan-then-
-        // bulk-put here measured ~0.56x (slower) on isolated short fields --
-        // the common real case for Digit (1-5 digit JSON numbers never reach
-        // the 16/32-byte vector stages at all) -- so this stays char-by-char.
-        while (i < n && chk(s[i])) { put(s[i]); ++i; }
-        return i;
-      }
-#else
-      // ONE_PARSE_RANGE_TIGHT_LOOP, or no SSE2/AVX2 at all (MCU targets): portable
-      // per-char path -- auto-vectorized by compiler at -O3 where it can. Never
-      // calls the two-arg put(), so it works on every backend unconditionally.
-      size_t run_n(const char* s, size_t n) {
-        size_t i = 0;
-        while (i < n && chk(s[i])) { put(s[i]); ++i; }
-        return i;
-      }
-#endif
+      size_t run_n(const char* s, size_t n) { return detail::range_scan_n<a,b>(*this, s, n); }
     };
     static constexpr bool chk(char c) { return a<=c&&c<=b; }
     static Res<char> run(Src s) {
@@ -416,7 +419,19 @@ namespace oneParse {
         if (chk(c)) { put(c); return StreamRes::Ok(c); }
         return StreamRes::Fail();
       }
-      // bulk: memchr for single-excluded-char predicates above threshold; tight loop elsewhere
+      // bulk: memchr for single-excluded-char predicates above threshold; tight loop elsewhere.
+      //
+      // Tried (and reverted): delegating Or<Range<a,b>,Rest...> bodies (e.g. JSON
+      // numbers' Or<Digit,Sign,Char<'.'>>) to range_scan_n per digit-run. Correct,
+      // but measured ~1.3x *slower* on realistic 1-12 digit JSON number fields --
+      // can't be fixed by gating on n like the memchr threshold above, because n
+      // here is the remaining buffer, not the field length (same caveat as the
+      // memchr note below), so the gate can't tell short fields from long ones.
+      // The real cost: a field like "3.14" or "-42" needs 2+ separate vector-probe
+      // calls (split at the sign/dot), and that per-call overhead doesn't amortize
+      // over fields this short. Range<a,b>::Part::run_n itself is still a real win
+      // used directly/standalone; it just doesn't pay off wrapped in String<Or<>>
+      // at JSON's typical field width.
 #ifndef ONE_PARSE_STRING_TIGHT_LOOP
       size_t run_n(const char* s, size_t n) {
         using RC = detail::is_single_reject<P>;
