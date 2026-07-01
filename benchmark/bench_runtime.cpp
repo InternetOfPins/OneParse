@@ -280,9 +280,10 @@ static void parse(const char* s) {
 #include <oneOutput/oneOutput.h>
 #include <cstring>
 #include <array>
+#include <string_view>
 using namespace oneParse;
 
-static const char PARSER_NAME[] = "op-index";
+static const char PARSER_NAME[] = "oneParse";
 
 struct NullOut {
     template<typename O> struct Part : O {
@@ -322,26 +323,121 @@ namespace idx_detail {
     // Stage 2: walk the index — same flat {"key":val, ...} grammar as JsonObj.
     // On success, `end` is set to one past the closing '}' (matches JsonObj's
     // run_n, which also stops at '}' rather than consuming trailing bytes).
-    inline bool walk(const char* s, const Arr<uint16_t,64>& idx, size_t& end) {
+    //
+    // FAIRNESS FIX: earlier revisions only validated structure and returned
+    // an end offset — no key or value was ever materialized. That is cheaper
+    // than what every other parser in this benchmark does (lexy/pegtl build
+    // key vectors, simdjson calls .key()/.value().raw_json_token() per
+    // field), so it wasn't a like-for-like comparison. This version now
+    // emits a std::string_view span for every key and every value (quoted
+    // or bare), matching simdjson's raw_json_token() extraction level and
+    // exceeding lexy/pegtl (which discard the value span entirely).
+    inline bool walk(const char* s, const Arr<uint16_t,64>& idx, size_t& end,
+                      Arr<Pair<std::string_view,std::string_view>,8>& out) {
         size_t k = 0;
         if (idx.len == 0 || s[idx.data[0]] != '{') return false;
         ++k;
         if (k < idx.len && s[idx.data[k]] == '}') { end = idx.data[k]+1; return true; }
         while (true) {
             if (k+1 >= idx.len || s[idx.data[k]] != '"') return false;
+            uint16_t kOpen = idx.data[k], kClose = idx.data[k+1];
             k += 2; // key: opening + closing quote offsets
             if (k >= idx.len || s[idx.data[k]] != ':') return false;
+            uint16_t colonPos = idx.data[k];
             ++k;
+
+            std::string_view keySpan(s + kOpen + 1, kClose - kOpen - 1);
+            std::string_view valSpan;
+
             if (k < idx.len && s[idx.data[k]] == '"') {
                 if (k+1 >= idx.len) return false;
+                uint16_t vOpen = idx.data[k], vClose = idx.data[k+1];
+                valSpan = std::string_view(s + vOpen + 1, vClose - vOpen - 1);
                 k += 2; // string value: opening + closing quote offsets
+            } else {
+                // unquoted value (number/null/bool): spans from just after
+                // the colon to the next structural offset. Leading
+                // whitespace is trimmed so the span matches what a real
+                // value-token extractor (e.g. simdjson's raw_json_token)
+                // would hand back — not just "the gap".
+                if (k >= idx.len) return false;
+                uint16_t vEnd = idx.data[k];
+                uint16_t vStart = colonPos + 1;
+                while (vStart < vEnd &&
+                       (s[vStart] == ' ' || s[vStart] == '\t' ||
+                        s[vStart] == '\n' || s[vStart] == '\r')) ++vStart;
+                valSpan = std::string_view(s + vStart, vEnd - vStart);
             }
-            // else: unquoted value (number/keyword) is the implicit gap up
-            // to the next structural offset — nothing indexed, nothing to walk.
+
+            out.push({keySpan, valSpan});
+
             if (k >= idx.len) return false;
             char c = s[idx.data[k]];
             if (c == ',') { ++k; continue; }
             if (c == '}') { end = idx.data[k]+1; return true; }
+            return false;
+        }
+    }
+
+    // ── Correctness gate (BENCH_VALIDATE only) ─────────────────────────────
+    //
+    // FNV-1a fingerprint over an extracted field list — cheap way to compare
+    // the fast scan()/walk() output against an independent reference without
+    // hand-writing a field-by-field diff for the common (pass) case.
+    inline uint64_t hash_combine(uint64_t h, std::string_view s) {
+        for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
+        return h;
+    }
+    inline uint64_t fingerprint_fields(const Arr<Pair<std::string_view,std::string_view>,8>& fields) {
+        uint64_t h = 1469598103934665603ull; // FNV offset basis
+        for (std::size_t i = 0; i < fields.len; ++i) {
+            h = hash_combine(h, fields.data[i].fst);
+            h = hash_combine(h, fields.data[i].snd);
+        }
+        return h;
+    }
+
+    // Deliberately independent of scan()/walk(): no structural table, no
+    // memchr, plain char-by-char with explicit whitespace skipping. Not
+    // meant to be fast — its only job is to catch bugs in the fast path,
+    // so it must not share any code (or bugs) with it.
+    inline bool reference_extract(const char* s, size_t n, size_t& end,
+                                   Arr<Pair<std::string_view,std::string_view>,8>& out) {
+        size_t i = 0;
+        auto skip_ws = [&] { while (i < n && (s[i]==' '||s[i]=='\t'||s[i]=='\n'||s[i]=='\r')) ++i; };
+        auto read_quoted = [&](std::string_view& sv) -> bool {
+            if (i >= n || s[i] != '"') return false;
+            size_t start = ++i;
+            while (i < n && s[i] != '"') ++i;
+            if (i >= n) return false;
+            sv = std::string_view(s + start, i - start);
+            ++i; // closing quote
+            return true;
+        };
+        skip_ws();
+        if (i >= n || s[i] != '{') return false;
+        ++i; skip_ws();
+        if (i < n && s[i] == '}') { end = i + 1; return true; }
+        while (true) {
+            std::string_view key;
+            if (!read_quoted(key)) return false;
+            skip_ws();
+            if (i >= n || s[i] != ':') return false;
+            ++i; skip_ws();
+            std::string_view val;
+            if (i < n && s[i] == '"') {
+                if (!read_quoted(val)) return false;
+            } else {
+                size_t start = i;
+                while (i < n && s[i]!=',' && s[i]!='}' &&
+                       s[i]!=' ' && s[i]!='\t' && s[i]!='\n' && s[i]!='\r') ++i;
+                val = std::string_view(s + start, i - start);
+            }
+            out.push({key, val});
+            skip_ws();
+            if (i >= n) return false;
+            if (s[i] == ',') { ++i; skip_ws(); continue; }
+            if (s[i] == '}') { end = i + 1; return true; }
             return false;
         }
     }
@@ -351,14 +447,19 @@ struct JsonObjIndexed {
     template<typename O> struct Part : O {
         using Base=O; using Base::Base;
 
+        Arr<Pair<std::string_view,std::string_view>,8> fields;
+
         size_t run_n(const char* s, size_t n) {
             Arr<uint16_t,64> idx{};
             idx_detail::scan(s, n, idx);
             size_t end = 0;
-            return idx_detail::walk(s, idx, end) ? end : 0;
+            fields.reset();
+            return idx_detail::walk(s, idx, end, fields) ? end : 0;
         }
         // run_n-only component: char-by-char path unused by this benchmark.
         StreamRes run(char) { return StreamRes::Fail(); }
+
+        uint64_t fingerprint() const { return idx_detail::fingerprint_fields(fields); }
     };
 };
 
@@ -367,7 +468,12 @@ using PIdx = ParseDef<JsonObjIndexed, NullOut>;
 static volatile uint32_t sink = 0;
 static void parse(const char* s) {
     PIdx p;
-    sink += (uint32_t)p.run_n(s, std::strlen(s));
+    size_t end = p.run_n(s, std::strlen(s));
+    // touch every extracted field so nothing is dead-code-eliminated —
+    // same intent as pegtl's `sink += st.keys.size()` below.
+    for (std::size_t i = 0; i < p.fields.len; ++i)
+        sink += (uint32_t)(p.fields.data[i].fst.size() + p.fields.data[i].snd.size());
+    sink += (uint32_t)end;
 }
 
 // ─── Spirit.X3 ─────────────────────────────────────────────────────────────
@@ -559,6 +665,44 @@ int main(int argc, char** argv) {
 
     std::string content = read_file(path);
     const char* src     = content.c_str();
+
+#if defined(PARSER_ONEPARSE_INDEX) && defined(BENCH_VALIDATE)
+    // Correctness gate: compare the fast scan()/walk() extraction against an
+    // independent reference implementation. Kept out of the timed binary
+    // entirely (separate BENCH_VALIDATE build) so it can't skew codegen or
+    // the measured numbers — see bench.py, which builds and runs this once
+    // per fixture before the timed sweep.
+    {
+        PIdx p;
+        size_t fast_end = p.run_n(src, content.size());
+        uint64_t fast_fp = p.fingerprint();
+
+        size_t ref_end = 0;
+        uint64_t ref_fp = 0;
+        Arr<Pair<std::string_view,std::string_view>,8> ref_fields{};
+        bool ref_ok = idx_detail::reference_extract(src, content.size(), ref_end, ref_fields);
+        if (ref_ok) ref_fp = idx_detail::fingerprint_fields(ref_fields);
+
+        bool pass = ref_ok && fast_end == ref_end && fast_fp == ref_fp;
+        std::cout << (pass ? "PASS " : "FAIL ") << path
+                  << "  fields=" << p.fields.len
+                  << "  fast_end=" << fast_end << " ref_end=" << ref_end
+                  << "  fast_fp=" << fast_fp << " ref_fp=" << ref_fp << "\n";
+        if (!pass) {
+            std::size_t m = std::max(p.fields.len, ref_fields.len);
+            for (std::size_t i = 0; i < m; ++i) {
+                std::string_view fk = i < p.fields.len   ? p.fields.data[i].fst   : std::string_view("<missing>");
+                std::string_view fv = i < p.fields.len   ? p.fields.data[i].snd   : std::string_view("<missing>");
+                std::string_view rk = i < ref_fields.len ? ref_fields.data[i].fst : std::string_view("<missing>");
+                std::string_view rv = i < ref_fields.len ? ref_fields.data[i].snd : std::string_view("<missing>");
+                if (fk != rk || fv != rv)
+                    std::cerr << "  [" << i << "] fast: " << fk << "=" << fv
+                              << "   ref: " << rk << "=" << rv << "\n";
+            }
+        }
+        return pass ? 0 : 1;
+    }
+#endif
 
     std::vector<double> times;
     times.reserve(runs);

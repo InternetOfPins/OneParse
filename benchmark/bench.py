@@ -67,6 +67,39 @@ with open(LIBRARY_JSON) as f:
     version = json.load(f)["version"]
 today = datetime.date.today().isoformat()
 
+# ── Validate (op-index only) ─────────────────────────────────────────────────
+#
+# Correctness gate for the "oneParse" (PARSER_ONEPARSE_INDEX) fast scan/walk
+# extraction: built as a SEPARATE binary (-DBENCH_VALIDATE), never the timed
+# one, so validation code can't skew codegen or the measured numbers. Compares
+# against an independent reference extractor (no memchr, no structural table)
+# baked into bench_runtime.cpp under the same guard. Aborts the whole run if
+# any fixture fails, before any timing happens.
+
+print("=== Validating oneParse extraction ===")
+validate_exe = os.path.join(BUILD_DIR, "bench_validate")
+result = subprocess.run(
+    BASE_FLAGS + ["-std=c++17", "-DPARSER_ONEPARSE_INDEX", "-DBENCH_VALIDATE",
+                  f"-I{OP_INC}", f"-I{HAPI_INC}", f"-I{OUT_INC}",
+                  "-o", validate_exe, SRC],
+    capture_output=True)
+if result.returncode != 0:
+    print(f"  build FAILED\n{result.stderr.decode()}")
+    sys.exit(1)
+
+validate_failed = False
+for fname in DATA_FILES:
+    fpath = os.path.join(DATA_DIR, fname)
+    res = subprocess.run([validate_exe, fpath], capture_output=True, text=True)
+    print(f"  {res.stdout.strip()}")
+    if res.returncode != 0:
+        print(res.stderr)
+        validate_failed = True
+if validate_failed:
+    print("=== Validation FAILED — aborting before timed run ===")
+    sys.exit(1)
+print()
+
 # ── Compile ─────────────────────────────────────────────────────────────────
 
 print("=== Compiling ===")
