@@ -436,7 +436,7 @@ namespace oneParse {
       size_t run_n(const char* s, size_t n) {
         using RC = detail::is_single_reject<P>;
         if constexpr (RC::value) {
-          // memchr: libc SIMD search — wins for string bodies ≥ 8 bytes (micro-bench verified)
+          // memchr: libc SIMD search — wins for string bodies ≥ 8 bytes
           // n is remaining input, not body length — for quoted strings inside Meta the
           // Meta fast path calls memchr directly and never reaches here
           if (n >= 8) {
