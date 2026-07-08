@@ -13,7 +13,7 @@
 #if defined(PARSER_STRLEN) || defined(PARSER_ONEPARSE) || defined(PARSER_ONEPARSE_NOKEY) \
  || defined(PARSER_SPIRIT) || defined(PARSER_LEXY) || defined(PARSER_ONEPARSE_STREAM) \
  || defined(PARSER_ONEPARSE_INDEX) \
- || defined(PARSER_PEGTL)  || defined(PARSER_SIMDJSON)
+ || defined(PARSER_PEGTL)  || defined(PARSER_SIMDJSON) || defined(PARSER_RAPIDJSON)
 
 #include <chrono>
 #include <fstream>
@@ -649,6 +649,36 @@ static void parse(const char* s) {
     for (auto field : doc.get_object()) {
         (void)field.key();
         (void)field.value().raw_json_token();
+        ++n;
+    }
+    sink += n;
+}
+
+// ─── RapidJSON ──────────────────────────────────────────────────────────────
+//
+// Full DOM build (rapidjson::Document), same tier as OneParse's own indexed
+// extraction — not an in-situ parse, since `s` is a shared const buffer
+// reused across all timed iterations. Document (and its MemoryPoolAllocator)
+// is kept static and reused across calls, same reuse pattern as simdjson's
+// static parser — a fresh Document per call would mostly measure allocator
+// setup, not parsing.
+
+#elif defined(PARSER_RAPIDJSON)
+
+#include "rapidjson/document.h"
+#include <string>
+
+static const char PARSER_NAME[] = "rapidjson";
+
+static rapidjson::Document rj_doc;
+static volatile size_t sink = 0;
+
+static void parse(const char* s) {
+    rj_doc.Parse(s);
+    size_t n = 0;
+    for (auto& m : rj_doc.GetObject()) {
+        (void)m.name.GetString();
+        (void)m.value;
         ++n;
     }
     sink += n;

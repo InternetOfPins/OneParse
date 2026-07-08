@@ -80,4 +80,5 @@ benchmark/*.png
 benchmark/lexy_src/
 benchmark/pegtl_src/
 benchmark/simdjson_src/
+benchmark/rapidjson_src/
 test/build_stream

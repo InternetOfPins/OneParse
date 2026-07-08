@@ -3,12 +3,12 @@
 bench.py — OneParse runtime parsing benchmark
 Run:     python3 bench.py
 Results: results/history.csv  (append-only, one row per run)
-Chart:   bench_runtime.png
+Charts:  bench_comparison.png (shareable cross-parser comparison)
+         bench_history.png    (internal OneParse version-over-version tracking)
 """
 
 import os, sys, csv, json, datetime, subprocess
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 
@@ -18,7 +18,8 @@ BUILD_DIR    = os.path.join(BENCH_DIR, "build")
 RESULTS_DIR  = os.path.join(BENCH_DIR, "results")
 HISTORY_CSV  = os.path.join(RESULTS_DIR, "history.csv")
 DATA_DIR     = os.path.join(BENCH_DIR, "data")
-CHART_OUT    = os.path.join(BENCH_DIR, "bench_runtime.png")
+CHART_COMPARISON = os.path.join(BENCH_DIR, "bench_comparison.png")
+CHART_HISTORY    = os.path.join(BENCH_DIR, "bench_history.png")
 LIBRARY_JSON = os.path.join(BENCH_DIR, "..", "library.json")
 HAPI_INC     = os.path.join(BENCH_DIR, "..", "..", "HAPI", "include")
 OP_INC       = os.path.join(BENCH_DIR, "..", "include")
@@ -26,6 +27,7 @@ OUT_INC      = os.path.join(BENCH_DIR, "..", "..", "OneOutput", "include")
 LEXY_INC     = os.path.join(BENCH_DIR, "lexy_src",    "include")
 PEGTL_INC    = os.path.join(BENCH_DIR, "pegtl_src",   "include")
 SIMDJSON_SRC = os.path.join(BENCH_DIR, "simdjson_src")
+RAPIDJSON_INC = os.path.join(BENCH_DIR, "rapidjson_src", "include")
 
 os.makedirs(BUILD_DIR,   exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -57,6 +59,8 @@ PARSERS = [
     ("simdjson",  ["-std=c++17", "-DPARSER_SIMDJSON",
                    f"-I{SIMDJSON_SRC}",
                    f"{SIMDJSON_SRC}/simdjson.cpp"]),
+    ("rapidjson", ["-std=c++17", "-DPARSER_RAPIDJSON",
+                   f"-I{RAPIDJSON_INC}"]),
 ]
 
 BASE_FLAGS = ["g++", "-O2"]
@@ -102,12 +106,43 @@ print()
 
 # ── Compile ─────────────────────────────────────────────────────────────────
 
+def newest_mtime(path):
+    """mtime of path, or the newest mtime of any file under it if a directory."""
+    if os.path.isfile(path):
+        return os.path.getmtime(path)
+    newest = 0.0
+    for root, _, files in os.walk(path):
+        for f in files:
+            try:
+                newest = max(newest, os.path.getmtime(os.path.join(root, f)))
+            except OSError:
+                pass
+    return newest
+
+def parser_deps(extra_flags):
+    """SRC + bench.py itself (covers BASE_FLAGS/PARSERS edits) + every -I dir
+    and any literal source file (e.g. simdjson.cpp) passed in extra_flags."""
+    deps = [SRC, os.path.abspath(__file__)]
+    for tok in extra_flags:
+        if tok.startswith("-I"):
+            deps.append(tok[2:])
+        elif os.path.isfile(tok):
+            deps.append(tok)
+    return deps
+
 print("=== Compiling ===")
 binaries = {}
 for name, extra_flags in PARSERS:
     exe = os.path.join(BUILD_DIR, "bench_" + name.replace(".", "_"))
-    cmd = BASE_FLAGS + extra_flags + ["-o", exe, SRC]  # std flag is in extra_flags
     print(f"  {name:12} ... ", end="", flush=True)
+
+    dep_mtime = max(newest_mtime(d) for d in parser_deps(extra_flags))
+    if os.path.exists(exe) and os.path.getmtime(exe) >= dep_mtime:
+        print("cached (up to date)")
+        binaries[name] = exe
+        continue
+
+    cmd = BASE_FLAGS + extra_flags + ["-o", exe, SRC]  # std flag is in extra_flags
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode != 0:
         print(f"FAILED\n{result.stderr.decode()}")
@@ -167,21 +202,20 @@ with open(HISTORY_CSV, newline="") as f:
 
 COLORS  = {"oneParse": "green", "op-nokey": "limegreen",
            "spirit.x3": "red", "strlen": "gray", "lexy": "steelblue",
-           "pegtl": "darkorange", "simdjson": "purple"}
+           "pegtl": "darkorange", "simdjson": "purple", "rapidjson": "brown"}
 MARKERS = {"small.json": "o", "medium.json": "s", "large.json": "^", "longstr.json": "D"}
 
-fig = plt.figure(figsize=(18, 7), layout="constrained")
-gs  = gridspec.GridSpec(1, 2, figure=fig, wspace=0.35)
-fig.suptitle(
+# ── Chart 1: cross-parser comparison (shareable) ────────────────────────────
+
+fig1 = plt.figure(figsize=(10, 7), layout="constrained")
+ax1  = fig1.add_subplot(1, 1, 1)
+fig1.suptitle(
     f"OneParse  v{version}  —  Runtime Parsing Benchmark\n"
-    "Flat JSON object  ·  OneParse (HAPI chain) vs PEGTL vs simdjson vs lexy vs Spirit.X3",
+    "Flat JSON object  ·  OneParse (HAPI chain) vs PEGTL vs simdjson vs lexy vs Spirit.X3 vs RapidJSON",
     fontsize=12
 )
 
-# Panel left: current throughput (MB/s) — bar chart by parser × input file
-ax1 = fig.add_subplot(gs[0, 0])
-
-parser_names = ["lexy", "pegtl", "oneParse", "simdjson", "spirit.x3"]
+parser_names = ["lexy", "pegtl", "oneParse", "simdjson", "spirit.x3", "rapidjson"]
 x     = list(range(len(DATA_FILES)))
 width = 0.15
 # use last row per (parser, input) — handles multiple runs on same day
@@ -201,9 +235,10 @@ for i, pname in enumerate(parser_names):
         match = latest_rows.get((pname, fname))
         vals.append(float(match["throughput_mbs"]) if match else 0)
     offset = (i - (len(parser_names) - 1) / 2) * width
-    hatch = "oo" if pname == "simdjson" else None
+    hatch = "oo" if pname in ("simdjson", "rapidjson") else None
+    label = {"simdjson": f"{pname}  (SIMD)", "rapidjson": f"{pname}  (general-purpose)"}.get(pname, pname)
     ax1.bar([xi + offset for xi in x], vals, width,
-            label=(f"{pname}  (SIMD)" if pname == "simdjson" else pname),
+            label=label,
             color=COLORS.get(pname, "blue"), alpha=0.82, hatch=hatch)
 
 ax1.set_title("Throughput by input size  (higher is faster)")
@@ -215,12 +250,17 @@ ax1.legend()
 ax1.grid(axis="y", alpha=0.5)
 ax1.text(0.5, -0.14,
           "lexy, PEGTL, oneParse, and Spirit.X3 are grammar-combinator frameworks — each parser is compiled from a\n"
-          "grammar definition specific to this benchmark, not a general-purpose library. Circled bar (simdjson) is\n"
-          "a dedicated, hand-tuned, SIMD-accelerated JSON parser — not a like-for-like comparison.",
+          "grammar definition specific to this benchmark, not a general-purpose library. Circled bars (simdjson,\n"
+          "RapidJSON) are dedicated, general-purpose JSON libraries — not a like-for-like comparison.",
           transform=ax1.transAxes, ha="center", va="top", fontsize=8, color="#555555", style="italic")
 
-# Panel right: OneParse throughput — every individual bench.py run as a point
-ax2 = fig.add_subplot(gs[0, 1])
+plt.savefig(CHART_COMPARISON, dpi=150)
+print(f"Chart  →  {CHART_COMPARISON}")
+
+# ── Chart 2: OneParse version-over-version history (internal) ──────────────
+
+fig2 = plt.figure(figsize=(10, 7), layout="constrained")
+ax2  = fig2.add_subplot(1, 1, 1)
 
 # Detect run boundaries: each (strlen, small.json) row starts a new invocation
 run_id = -1
@@ -286,5 +326,5 @@ if not op_rows:
     ax2.text(0.5, 0.5, "No history yet", transform=ax2.transAxes,
              ha="center", va="center", fontsize=11, color="gray")
 
-plt.savefig(CHART_OUT, dpi=150)
-print(f"Chart  →  {CHART_OUT}")
+plt.savefig(CHART_HISTORY, dpi=150)
+print(f"Chart  →  {CHART_HISTORY}")
