@@ -1,6 +1,4 @@
-# OneParse
-
-<img src="logo.png" alt="OneParse logo" width="64" height="64">
+# <img src="logo.png" alt="OneParse logo" width="32" height="32"> OneParse
 
 **HAPI Compatibility:** Works with new Check/Apply/ApplyPack API (2026-Q2)
 
