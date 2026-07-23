@@ -1,5 +1,7 @@
 # OneParse
 
+<img src="logo.png" alt="OneParse logo" width="64" height="64">
+
 **HAPI Compatibility:** Works with new Check/Apply/ApplyPack API (2026-Q2)
 
 Parser combinator components for embedded C++ — zero heap, zero virtual dispatch, embedded-friendly.
