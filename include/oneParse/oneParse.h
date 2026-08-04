@@ -466,7 +466,7 @@ namespace oneParse {
   struct Lit {
     template<typename O> struct Part : O {
       using Base=O; using Base::Base; using Base::put;
-      static constexpr char chars[]{CC...};
+      static constexpr char chars[sizeof...(CC)]{CC...};
       char   buf[sizeof...(CC)]{};
       size_t pos{0};
       static constexpr bool chk(char c) { return sizeof...(CC)>0 && chars[0]==c; }
