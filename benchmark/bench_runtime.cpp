@@ -186,47 +186,54 @@ struct JsonObj {
         typename JsonStr::template Part<O> key;
         typename JsonVal::template Part<O> val;
 
+        // Loop instead of self-recursive `return run(c);` -- see
+        // examples/json/src/main.cpp and OneParse/.RnD/hls/FINDINGS.md for
+        // the full rationale (Bambu HLS topfname call-graph self-edge bug).
+        // Byte-identical logic and timing to the recursive form -- native
+        // codegen doesn't care either way, this is purely an
+        // HLS-synthesizability fix.
         StreamRes run(char c) {
-            switch (phase) {
-                case Phase::Open:
-                    if (c=='{') { phase=Phase::AfterOpen; return StreamRes::Ok(c); }
-                    return StreamRes::Fail();
-                case Phase::AfterOpen:
-                    if (isSpace(c)) return StreamRes::Ok(c);
-                    if (c=='}')     { phase=Phase::Done; return StreamRes::Ok(c); }
-                    phase=Phase::Key;
-                    [[fallthrough]];
-                case Phase::Key: {
-                    auto r = key.run(c);
-                    if (r.state==St::fail) { phase=Phase::Colon; return run(c); }
-                    return r;
-                }
-                case Phase::Colon:
-                    if (isSpace(c)) return StreamRes::Ok(c);
-                    if (c==':') { phase=Phase::ValStart; return StreamRes::Ok(c); }
-                    return StreamRes::Fail();
-                case Phase::ValStart:
-                    if (isSpace(c)) return StreamRes::Ok(c);
-                    phase=Phase::Val;
-                    [[fallthrough]];
-                case Phase::Val: {
-                    auto r = val.run(c);
-                    if (r.state==St::fail) { phase=Phase::Sep; return run(c); }
-                    return r;
-                }
-                case Phase::Sep:
-                    if (isSpace(c)) return StreamRes::Ok(c);
-                    if (c==',') {
-                        key=decltype(key){}; val=decltype(val){};
-                        phase=Phase::AfterOpen;
-                        return StreamRes::Ok(c);
+            while (true) {
+                switch (phase) {
+                    case Phase::Open:
+                        if (c=='{') { phase=Phase::AfterOpen; return StreamRes::Ok(c); }
+                        return StreamRes::Fail();
+                    case Phase::AfterOpen:
+                        if (isSpace(c)) return StreamRes::Ok(c);
+                        if (c=='}')     { phase=Phase::Done; return StreamRes::Ok(c); }
+                        phase=Phase::Key;
+                        continue;
+                    case Phase::Key: {
+                        auto r = key.run(c);
+                        if (r.state==St::fail) { phase=Phase::Colon; continue; }
+                        return r;
                     }
-                    if (c=='}') { phase=Phase::Done; return StreamRes::Ok(c); }
-                    return StreamRes::Fail();
-                case Phase::Done:
-                    return StreamRes::Fail();
+                    case Phase::Colon:
+                        if (isSpace(c)) return StreamRes::Ok(c);
+                        if (c==':') { phase=Phase::ValStart; return StreamRes::Ok(c); }
+                        return StreamRes::Fail();
+                    case Phase::ValStart:
+                        if (isSpace(c)) return StreamRes::Ok(c);
+                        phase=Phase::Val;
+                        continue;
+                    case Phase::Val: {
+                        auto r = val.run(c);
+                        if (r.state==St::fail) { phase=Phase::Sep; continue; }
+                        return r;
+                    }
+                    case Phase::Sep:
+                        if (isSpace(c)) return StreamRes::Ok(c);
+                        if (c==',') {
+                            key=decltype(key){}; val=decltype(val){};
+                            phase=Phase::AfterOpen;
+                            return StreamRes::Ok(c);
+                        }
+                        if (c=='}') { phase=Phase::Done; return StreamRes::Ok(c); }
+                        return StreamRes::Fail();
+                    case Phase::Done:
+                        return StreamRes::Fail();
+                }
             }
-            return StreamRes::Fail();
         }
 
         // bulk path: fast-scan string bodies, char-by-char only for phase transitions
