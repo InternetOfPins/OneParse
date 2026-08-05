@@ -50,56 +50,67 @@ struct JsonObj {
     typename JsonStr::template Part<O> key;
     typename JsonVal::template Part<O> val;
 
+    // Loop instead of self-recursive `return run(c);` on phase transitions
+    // (Key->Colon, Val->Sep) -- a HAPI/HLS-portability constraint, not a
+    // style choice: the recursive-call form creates a self-edge in the
+    // function's call graph, which triggers a real bug in Bambu HLS's
+    // clang16_plugin_topfname.so (a missing-memoization reachability
+    // traversal -- confirmed against Bambu's own source, see
+    // OneParse/.RnD/hls/FINDINGS.md). A loop is intra-procedural control
+    // flow, invisible to a call-graph pass, and produces byte-identical
+    // output under both g++ and clang++ -- confirmed before/after this
+    // change on every fixture this example demonstrates.
     StreamRes run(char c) {
-      switch (phase) {
+      while (true) {
+        switch (phase) {
 
-        case Phase::Open:
-          if (c=='{') { phase=Phase::AfterOpen; return StreamRes::Ok(c); }
-          return StreamRes::Fail();
+          case Phase::Open:
+            if (c=='{') { phase=Phase::AfterOpen; return StreamRes::Ok(c); }
+            return StreamRes::Fail();
 
-        case Phase::AfterOpen:
-          if (isSpace(c)) return StreamRes::Ok(c);
-          if (c=='}')     { phase=Phase::Done; return StreamRes::Ok(c); }
-          phase=Phase::Key;
-          [[fallthrough]];
+          case Phase::AfterOpen:
+            if (isSpace(c)) return StreamRes::Ok(c);
+            if (c=='}')     { phase=Phase::Done; return StreamRes::Ok(c); }
+            phase=Phase::Key;
+            continue;
 
-        case Phase::Key: {
-          auto r = key.run(c);
-          if (r.state==St::fail) { phase=Phase::Colon; return run(c); }
-          return r;
-        }
-
-        case Phase::Colon:
-          if (isSpace(c)) return StreamRes::Ok(c);
-          if (c==':') { put(':'); put(' '); phase=Phase::ValStart; return StreamRes::Ok(c); }
-          return StreamRes::Fail();
-
-        case Phase::ValStart:
-          if (isSpace(c)) return StreamRes::Ok(c);
-          phase=Phase::Val;
-          [[fallthrough]];
-
-        case Phase::Val: {
-          auto r = val.run(c);
-          if (r.state==St::fail) { phase=Phase::Sep; return run(c); }
-          return r;
-        }
-
-        case Phase::Sep:
-          if (isSpace(c)) return StreamRes::Ok(c);
-          if (c==',') {
-            key = decltype(key){}; val = decltype(val){};
-            phase=Phase::AfterOpen;
-            put('\n');
-            return StreamRes::Ok(c);
+          case Phase::Key: {
+            auto r = key.run(c);
+            if (r.state==St::fail) { phase=Phase::Colon; continue; }
+            return r;
           }
-          if (c=='}') { phase=Phase::Done; return StreamRes::Ok(c); }
-          return StreamRes::Fail();
 
-        case Phase::Done:
-          return StreamRes::Fail();
+          case Phase::Colon:
+            if (isSpace(c)) return StreamRes::Ok(c);
+            if (c==':') { put(':'); put(' '); phase=Phase::ValStart; return StreamRes::Ok(c); }
+            return StreamRes::Fail();
+
+          case Phase::ValStart:
+            if (isSpace(c)) return StreamRes::Ok(c);
+            phase=Phase::Val;
+            continue;
+
+          case Phase::Val: {
+            auto r = val.run(c);
+            if (r.state==St::fail) { phase=Phase::Sep; continue; }
+            return r;
+          }
+
+          case Phase::Sep:
+            if (isSpace(c)) return StreamRes::Ok(c);
+            if (c==',') {
+              key = decltype(key){}; val = decltype(val){};
+              phase=Phase::AfterOpen;
+              put('\n');
+              return StreamRes::Ok(c);
+            }
+            if (c=='}') { phase=Phase::Done; return StreamRes::Ok(c); }
+            return StreamRes::Fail();
+
+          case Phase::Done:
+            return StreamRes::Fail();
+        }
       }
-      return StreamRes::Fail();
     }
   };
 };
