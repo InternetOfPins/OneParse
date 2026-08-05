@@ -622,9 +622,23 @@ namespace oneParse {
     constexpr void alt_fill_table(std::array<uint8_t, 256>& t) {
       if constexpr (I < sizeof...(PP)) {
         using P = std::tuple_element_t<I, std::tuple<PP...>>;
-        for (size_t c = 0; c < 256; ++c)
-          if (t[c] == 255 && P::template Part<ParseAPI<Nil>>::chk((char)c))
-            t[c] = (uint8_t)I;
+        // Iterate over char's OWN value range directly (-128..127), not
+        // size_t 0..255 narrowed down to char -- converting an int outside
+        // char's representable range INTO char is what GCC's stricter
+        // constexpr evaluator rejects ("overflow in constant expression")
+        // when char is signed (Clang tolerates it, GCC doesn't). Every ci
+        // here fits exactly in char by construction, whether char is signed
+        // or unsigned, so int->char is always exact, never narrowing. The
+        // reverse direction (char, possibly negative, -> unsigned char for
+        // the table index) is always well-defined modulo reduction
+        // regardless of signedness -- same fix class as Lit<>'s chars[]
+        // bound issue.
+        for (int ci = -128; ci <= 127; ++ci) {
+          char c = static_cast<char>(ci);
+          unsigned char idx = static_cast<unsigned char>(c);
+          if (t[idx] == 255 && P::template Part<ParseAPI<Nil>>::chk(c))
+            t[idx] = (uint8_t)I;
+        }
         alt_fill_table<I+1, PP...>(t);
       }
     }
