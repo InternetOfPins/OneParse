@@ -168,9 +168,11 @@ a first cross-check:
   device-technology-library-binding story as HAPI's own alt-device
   cross-checks; these numbers were never claimed portable across devices.
 
-Vitis HLS / Intel HLS Compiler: integration scaffolding ready
-(`extra_hls_vitis.py`/`extra_hls_intel.py`, `[env:hls-vitis]`/
-`[env:hls-intel]`) but **not run** — blocked on a Xilinx account + Vitis
-Unified Installer / an Intel account + Quartus Prime Lite download,
-interactive steps not done in this pass. LegUp was ruled out for this
-whole codebase; see `HAPI/.RnD/legupHLS/HANDOFF.md`.
+Vitis HLS: integration scaffolding ready (`extra_hls_vitis.py`,
+`[env:hls-vitis]`) but **not run** — blocked on a Xilinx account + Vitis
+Unified Installer, an interactive step not done in this pass. Intel HLS
+Compiler and LegUp were both ruled out for this whole codebase: the
+classic `i++` command-line compiler now appears to require Quartus Prime
+Pro edition (paid), and LegUp's free academic version is a frozen
+pre-C++17 snapshot with a closed commercial successor; see
+`HAPI/.RnD/legupHLS/HANDOFF.md`.
