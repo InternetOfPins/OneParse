@@ -115,17 +115,36 @@ respectively (gitignored).
 
 | | `jsonCharTop` (tiny), Bambu | `jsonBufTop` (steroids), Bambu | `jsonCharTop`, AMD Vitis HLS 2026.1 |
 |---|---|---|---|
-| Flip-flops | **1141** | **3282** (+129 in a separate `memchr` helper Bambu factored out) | 5 |
+| Flip-flops | **1141** | **3282** (+129 in a separate `memchr` helper Bambu factored out) | 2182 |
 | Registers (SE + STD) | 94 | 182 | — |
 | Multiplexers | 88 | 163 | — |
-| LUTs | — | — | 88 |
+| LUTs | — | — | 2835 |
 | LUT-based FUs | 61 | 91 | — |
 | Folded constants | 83 | 101 | — |
 | Modules instantiated | 343 | 1638 (+26 in `memchr`) | — |
-| Estimated max frequency | 103.82 MHz | 100.20 MHz (`memchr`: 156.38 MHz) | 155.6 MHz |
-| Minimum slack | 0.368 ns | 0.020 ns (`memchr`: 3.605 ns) | — |
+| Estimated max frequency | 103.82 MHz | 100.20 MHz (`memchr`: 156.38 MHz) | not reported directly (see slack) |
+| Minimum slack | 0.368 ns | 0.020 ns (`memchr`: 3.605 ns) | 0.41 ns |
 | **Total estimated area** | **9585** | **15468** (+238 in `memchr`) | N/A — Vitis reports LUT/FF/DSP, not a unified area score |
 | Estimated number of DSPs | **0** | **0** | **0** |
+| BRAM | 0 (distributed RAM only) | 0 | **1** |
+
+Re-derived directly from `.hls_out_tiny_vitis/proj/solution1/syn/report/csynth.rpt`
+(2026-08-18) after this table's earlier Vitis numbers (5 FF / 88 LUT /
+155.6 MHz) turned out to be wrong — a transcription error, not a second
+real run: those figures were implausibly small for a design that
+actually compiles the full `Alt<5 alternatives>`/`JsonStr`/`JsonNum`
+dispatch tree (2,150 total instructions per Vitis's own Design Size
+Report), and don't match Bambu's own 1141-FF result for the identical
+source closely enough to be believable at face value. Re-run fresh,
+independently, to confirm: same 2182 FF / 2835 LUT / 1 BRAM / 0.41ns
+slack, reproducible. Roughly ~2x Bambu's flip-flop count for the same
+design — a real cross-toolchain difference in resource-mapping strategy,
+same spirit as the DSP-vs-shift/add divergences already documented
+elsewhere in this project family, not a discrepancy to be resolved. The
+1 BRAM instance is new information this correction surfaced — not
+investigated further here (which structure it maps to is an open
+question), but real, not zero the way Bambu's distributed-RAM-only
+result is.
 
 `jsonBufTop` does not synthesize under Vitis HLS: its frontend rejects
 `memchr()` as an undefined function, where Bambu recognizes and lowers
