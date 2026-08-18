@@ -1,22 +1,26 @@
-# Parameterized Vitis HLS synthesis script, invoked by extra_hls_vitis.py.
-#
-# Args (via -tclargs): top_fname src_file include_dirs part clock_period_ns
-#   include_dirs is a single string of space-separated -I flags (the
-#   caller builds it, since this example needs three include paths).
+# Reference template of the Tcl content extra_hls_vitis.py generates per
+# target -- NOT invoked directly. vitis-run (2026.1's HLS entry point,
+# replacing standalone vitis_hls) has no -tclargs/argv passthrough, so
+# extra_hls_vitis.py writes this same sequence with values substituted
+# inline instead of parameterizing this file via $argv. Kept here as a
+# readable, manually-runnable copy -- fill in the placeholders below and
+# run with `vitis-run --mode hls --tcl run_hls.tcl`.
+#   include_flags is a single string of space-separated -I flags (this
+#   example needs three include paths).
 #
 # Mirrors extra_hls.py's Bambu invocation shape -- see README.md's
 # Cross-tool/cross-config validation section.
 
-set top_fname    [lindex $argv 0]
-set src_file     [lindex $argv 1]
-set include_flags [lindex $argv 2]
-set part         [lindex $argv 3]
-set period       [lindex $argv 4]
+set top_fname     TOP_FUNCTION_NAME
+set src_file      SOURCE_FILE_PATH
+set include_flags "-IHAPI_INC -IONEPARSE_INC -IONEOUTPUT_INC"
+set part          xc7a100tcsg324-1
+set period        10
 
 open_project -reset proj
 set_top $top_fname
 add_files $src_file -cflags "$include_flags -std=c++17"
-open_solution -reset "solution1" -flow_target vivado
+open_solution -reset "solution1"
 set_part $part
 create_clock -period $period -name default
 csynth_design

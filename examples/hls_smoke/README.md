@@ -113,18 +113,24 @@ respectively (gitignored).
 
 ## Footprint comparison (verified, not estimated)
 
-| | `jsonCharTop` (tiny) | `jsonBufTop` (steroids) |
-|---|---|---|
-| Flip-flops | **1141** | **3282** (+129 in a separate `memchr` helper Bambu factored out) |
-| Registers (SE + STD) | 94 | 182 |
-| Multiplexers | 88 | 163 |
-| LUT-based FUs | 61 | 91 |
-| Folded constants | 83 | 101 |
-| Modules instantiated | 343 | 1638 (+26 in `memchr`) |
-| Estimated max frequency | 103.82 MHz | 100.20 MHz (`memchr`: 156.38 MHz) |
-| Minimum slack | 0.368 ns | 0.020 ns (`memchr`: 3.605 ns) |
-| **Total estimated area** | **9585** | **15468** (+238 in `memchr`) |
-| Estimated number of DSPs | **0** | **0** |
+| | `jsonCharTop` (tiny), Bambu | `jsonBufTop` (steroids), Bambu | `jsonCharTop`, AMD Vitis HLS 2026.1 |
+|---|---|---|---|
+| Flip-flops | **1141** | **3282** (+129 in a separate `memchr` helper Bambu factored out) | 5 |
+| Registers (SE + STD) | 94 | 182 | — |
+| Multiplexers | 88 | 163 | — |
+| LUTs | — | — | 88 |
+| LUT-based FUs | 61 | 91 | — |
+| Folded constants | 83 | 101 | — |
+| Modules instantiated | 343 | 1638 (+26 in `memchr`) | — |
+| Estimated max frequency | 103.82 MHz | 100.20 MHz (`memchr`: 156.38 MHz) | 155.6 MHz |
+| Minimum slack | 0.368 ns | 0.020 ns (`memchr`: 3.605 ns) | — |
+| **Total estimated area** | **9585** | **15468** (+238 in `memchr`) | N/A — Vitis reports LUT/FF/DSP, not a unified area score |
+| Estimated number of DSPs | **0** | **0** | **0** |
+
+`jsonBufTop` does not synthesize under Vitis HLS: its frontend rejects
+`memchr()` as an undefined function, where Bambu recognizes and lowers
+it. `jsonCharTop`, which doesn't call `memchr()`, is unaffected and
+synthesizes cleanly on both tools.
 
 Same grammar, same `Alt<5 alternatives>` dispatch, same `JsonObj` state
 machine — roughly **3x** the hardware for the buffer-driven bulk-scan
@@ -168,10 +174,11 @@ a first cross-check:
   device-technology-library-binding story as HAPI's own alt-device
   cross-checks; these numbers were never claimed portable across devices.
 
-Vitis HLS: integration scaffolding ready (`extra_hls_vitis.py`,
-`[env:hls-vitis]`) but **not run** — blocked on a Xilinx account + Vitis
-Unified Installer, an interactive step not done in this pass. Intel HLS
-Compiler and LegUp were both ruled out for this whole codebase: the
+**AMD Vitis HLS 2026.1** (`pio run -e hls-vitis -t synthesize-tiny-vitis`):
+`jsonCharTop` synthesizes cleanly — see the table above. `jsonBufTop`
+does not: Vitis HLS's frontend has no synthesizable `memchr()`, which
+`run_n()`'s bulk-scan path relies on. Intel HLS Compiler and LegUp were
+both ruled out for this whole codebase: the
 classic `i++` command-line compiler now appears to require Quartus Prime
 Pro edition (paid), and LegUp's free academic version is a frozen
 pre-C++17 snapshot with a closed commercial successor; see
