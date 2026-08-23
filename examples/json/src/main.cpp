@@ -58,8 +58,8 @@ struct JsonObj {
     // traversal -- confirmed against Bambu's own source). A loop is
     // intra-procedural control flow, invisible to a call-graph pass, and
     // produces byte-identical
-    // output under both g++ and clang++ -- confirmed before/after this
-    // change on every fixture this example demonstrates.
+    // output under both g++ and clang++ on every fixture this example
+    // demonstrates.
     StreamRes run(char c) {
       while (true) {
         switch (phase) {

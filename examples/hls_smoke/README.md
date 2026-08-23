@@ -50,19 +50,15 @@ Bambu is target-aware, not target-independent: functional-unit selection
 and every area/frequency/slack number are characterized against a
 specific device technology library -- a run with no `--device-name`
 produces numbers against Bambu's undocumented internal default, which
-aren't citable against any real, ownable board. **This example originally
-ran against that undocumented default**; it now pins the same device/
-period as HAPI's `hls_fir`/`hls_can_disabler`/`hls_smoke`:
+aren't citable against any real, ownable board. This example pins the
+same device/period as HAPI's `hls_fir`/`hls_can_disabler`/`hls_smoke`:
 
 ```
 --device-name=xc7a100t-1csg324-VVD --clock-period=10
 ```
 
 `xc7a100t-1csg324-VVD` is the Xilinx Artix-7 on the Digilent Arty A7/
-Nexys A7 (10ns targets 100MHz). The flip-flop counts in the footprint
-comparison below (1141 / 3282) are **unchanged** from the original
-default-device run — only the frequency/slack/area figures are new, now
-citable against a confirmed device instead of an undocumented one.
+Nexys A7 (10ns targets 100MHz).
 
 ## Run it through Bambu HLS
 
@@ -127,23 +123,13 @@ respectively (gitignored).
 | Estimated number of DSPs | **0** | **0** | **0** |
 | BRAM | 0 (distributed RAM only) | 0 | **1** |
 
-Re-derived directly from `.hls_out_tiny_vitis/proj/solution1/syn/report/csynth.rpt`
-(2026-08-18) after this table's earlier Vitis numbers (5 FF / 88 LUT /
-155.6 MHz) turned out to be wrong — a transcription error, not a second
-real run: those figures were implausibly small for a design that
-actually compiles the full `Alt<5 alternatives>`/`JsonStr`/`JsonNum`
-dispatch tree (2,150 total instructions per Vitis's own Design Size
-Report), and don't match Bambu's own 1141-FF result for the identical
-source closely enough to be believable at face value. Re-run fresh,
-independently, to confirm: same 2182 FF / 2835 LUT / 1 BRAM / 0.41ns
-slack, reproducible. Roughly ~2x Bambu's flip-flop count for the same
-design — a real cross-toolchain difference in resource-mapping strategy,
-same spirit as the DSP-vs-shift/add divergences already documented
-elsewhere in this project family, not a discrepancy to be resolved. The
-1 BRAM instance is new information this correction surfaced — not
-investigated further here (which structure it maps to is an open
-question), but real, not zero the way Bambu's distributed-RAM-only
-result is.
+Derived directly from `.hls_out_tiny_vitis/proj/solution1/syn/report/csynth.rpt`:
+2182 FF / 2835 LUT / 1 BRAM / 0.41ns slack, reproducible. Roughly ~2x
+Bambu's flip-flop count for the same design — a real cross-toolchain
+difference in resource-mapping strategy, same spirit as the DSP-vs-shift/add
+divergences already documented elsewhere in this project family. Vitis maps
+state to 1 BRAM instance where Bambu uses distributed RAM only (which
+structure that BRAM corresponds to is not investigated further here).
 
 `jsonBufTop` does not synthesize under Vitis HLS: its frontend rejects
 `memchr()` as an undefined function, where Bambu recognizes and lowers
@@ -176,12 +162,11 @@ a first cross-check:
   construction — a distinct failure mode from HAPI's own GCC8 rejection
   (`bound_template_template_parm`, a parse-time template-template-
   parameter issue). This one is a `constexpr`-evaluation issue specific to
-  GCC8's signed-`char` overflow handling under `-fwrapv` — confirmed here
-  to still reproduce against the isolated,
-  device-pinned `synthesize-tiny-gcc8`/`synthesize-buffer-gcc8` targets.
+  GCC8's signed-`char` overflow handling under `-fwrapv`, reproducing
+  against the isolated, device-pinned `synthesize-tiny-gcc8`/
+  `synthesize-buffer-gcc8` targets.
   `I386_CLANG16` remains the only viable frontend for this codebase, same
-  conclusion as HAPI's own examples, reached via a genuinely different
-  bug.
+  conclusion as HAPI's own examples, via a distinct bug on this codebase.
 - **Lattice ECP5 device (`LFE5U85F8BG756C`), `jsonCharTop` only: DSP
   inference is device-independent, flip-flop/area/frequency are not.**
   DSP count (0) matched exactly against a second, non-Xilinx vendor's

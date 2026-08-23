@@ -21,8 +21,6 @@ hls_smoke for direct comparability -- Bambu is target-aware, not
 target-independent: functional-unit selection is characterized against a
 specific device technology library, so an unconfirmed/default device
 produces numbers that aren't citable against any real, ownable board.
-(This example previously ran against Bambu's undocumented default device
--- see README.md's Target device note for what changed.)
 
 The -gcc8/-altdevice targets are second, independent Bambu configs (see
 README.md's Cross-tool/cross-config validation section) -- not a

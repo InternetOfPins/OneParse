@@ -197,9 +197,8 @@ static void test_range_fuzz(unsigned seed, int trials) {
 }
 
 // ── JsonNum = String<Or<Digit,Sign,Char<'.'>>> — run_n correctness (fuzzed) ──
-// General regression coverage for JsonNum's run_n (currently the plain tight
-// loop -- a digit-run fast path via range_scan_n was tried and reverted, see
-// the note on String::Part::run_n). Mixes digit runs with sign/dot chars,
+// General regression coverage for JsonNum's run_n (a plain tight loop).
+// Mixes digit runs with sign/dot chars,
 // including "-3.14"-shaped input: a case that would silently mis-parse if this
 // were ever routed through Alt<>'s commit-to-one-alternative semantics instead
 // of Or<>'s per-char union (Alt would commit to Sign on '-' and then fail on
