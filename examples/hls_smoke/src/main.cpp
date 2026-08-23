@@ -17,11 +17,10 @@
 // different hardware cost depending on which entry point is used.
 //
 // ConsoleOut swapped for a synthesizable accumulating Out (same pattern as
-// every other .../hls_smoke example) -- see HAPI/examples/hls_smoke and
-// OneParse/.RnD/hls/FINDINGS.md for why (iostream has no synthesis
-// target). run()'s self-recursion was also rewritten as a loop -- see
-// FINDINGS.md's root-cause writeup (a real Bambu topfname bug, worked
-// around here, not a HAPI/OneParse issue).
+// every other .../hls_smoke example, see HAPI/examples/hls_smoke) --
+// iostream has no synthesis target. run()'s self-recursion was also
+// rewritten as a loop, working around a real Bambu topfname bug (not a
+// HAPI/OneParse issue).
 
 #include <oneParse/oneParse.h>
 #include <oneOutput/oneOutput.h>

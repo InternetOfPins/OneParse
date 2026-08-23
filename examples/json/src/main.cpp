@@ -55,9 +55,9 @@ struct JsonObj {
     // style choice: the recursive-call form creates a self-edge in the
     // function's call graph, which triggers a real bug in Bambu HLS's
     // clang16_plugin_topfname.so (a missing-memoization reachability
-    // traversal -- confirmed against Bambu's own source, see
-    // OneParse/.RnD/hls/FINDINGS.md). A loop is intra-procedural control
-    // flow, invisible to a call-graph pass, and produces byte-identical
+    // traversal -- confirmed against Bambu's own source). A loop is
+    // intra-procedural control flow, invisible to a call-graph pass, and
+    // produces byte-identical
     // output under both g++ and clang++ -- confirmed before/after this
     // change on every fixture this example demonstrates.
     StreamRes run(char c) {

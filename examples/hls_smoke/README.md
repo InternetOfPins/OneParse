@@ -24,10 +24,9 @@ Both use the identical `JsonObj`/`JsonStr`/`JsonNum`/`Alt<5 alternatives>`
 grammar. `ConsoleOut` is swapped for a synthesizable accumulating `Out`
 (same pattern as every other `hls_smoke` example — I/O has no synthesis
 target). `JsonObj::run()`'s phase-transition self-recursion is rewritten
-as a loop — a real HLS-portability fix, not a style choice; see
-[`OneParse/.RnD/hls/FINDINGS.md`](../../.RnD/hls/FINDINGS.md) for the full
-root-cause writeup (a genuine bug in Bambu's own `topfname` call-graph
-pass, worked around from OneParse's side with zero behavior change).
+as a loop — a real HLS-portability fix, not a style choice, working
+around a genuine bug in Bambu's own `topfname` call-graph pass with zero
+behavior change on OneParse's side.
 
 `hls/char_top.cpp` and `hls/buf_top.cpp` are isolated, single-purpose
 translation units (not part of `src/`, so PlatformIO's native build
@@ -176,11 +175,9 @@ a first cross-check:
   `oneParse::detail::make_alt_table`'s `constexpr` dispatch-table
   construction — a distinct failure mode from HAPI's own GCC8 rejection
   (`bound_template_template_parm`, a parse-time template-template-
-  parameter issue; see `HAPI/.RnD/bambuHLS/HANDOFF.md` finding #4). This
-  one is a `constexpr`-evaluation issue specific to GCC8's signed-`char`
-  overflow handling under `-fwrapv`, already root-caused in
-  [`OneParse/.RnD/hls/FINDINGS.md`](../../.RnD/hls/FINDINGS.md)'s
-  "Blocker 1" — confirmed here to still reproduce against the isolated,
+  parameter issue). This one is a `constexpr`-evaluation issue specific to
+  GCC8's signed-`char` overflow handling under `-fwrapv` — confirmed here
+  to still reproduce against the isolated,
   device-pinned `synthesize-tiny-gcc8`/`synthesize-buffer-gcc8` targets.
   `I386_CLANG16` remains the only viable frontend for this codebase, same
   conclusion as HAPI's own examples, reached via a genuinely different
@@ -200,5 +197,4 @@ does not: Vitis HLS's frontend has no synthesizable `memchr()`, which
 both ruled out for this whole codebase: the
 classic `i++` command-line compiler now appears to require Quartus Prime
 Pro edition (paid), and LegUp's free academic version is a frozen
-pre-C++17 snapshot with a closed commercial successor; see
-`HAPI/.RnD/legupHLS/HANDOFF.md`.
+pre-C++17 snapshot with a closed commercial successor.
