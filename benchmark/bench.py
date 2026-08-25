@@ -48,6 +48,12 @@ PARSERS = [
     # bench_runtime.cpp for reference, no longer the reported "oneParse" row
     ("oneParse-stream", ["-std=c++17", "-DPARSER_ONEPARSE_STREAM",
                    f"-I{OP_INC}", f"-I{HAPI_INC}", f"-I{OUT_INC}"]),
+    # same PARSER_ONEPARSE_INDEX build with exception unwind tables stripped —
+    # tracks whether -fno-exceptions moves the number now that OneParse's
+    # combinators return Res<T>/ok-flags rather than throwing; excluded from
+    # parser_names below (reference row, not a reported comparison bar)
+    ("oneParse-noexc", ["-std=c++17", "-DPARSER_ONEPARSE_INDEX", "-fno-exceptions",
+                   f"-I{OP_INC}", f"-I{HAPI_INC}", f"-I{OUT_INC}"]),
     # old pointer-based API — needs full rewrite to re-enable
     # ("oneParse",  ["-std=c++17", "-DPARSER_ONEPARSE",  ...]),
     # ("op-nokey",  ["-std=c++17", "-DPARSER_ONEPARSE_NOKEY", ...]),
