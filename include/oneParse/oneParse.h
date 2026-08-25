@@ -169,7 +169,7 @@ namespace oneParse {
       }
     };
     static constexpr bool chk(char c) { return c==q; }
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       if (!*s || *s!=q) return {false, {}, s, s};
       return {true, *s, s+1};
     }
@@ -262,7 +262,7 @@ namespace oneParse {
       size_t run_n(const char* s, size_t n) { return detail::range_scan_n<a,b>(*this, s, n); }
     };
     static constexpr bool chk(char c) { return a<=c&&c<=b; }
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       if (!*s || !(a<=*s&&*s<=b)) return {false, {}, s, s};
       return {true, *s, s+1};
     }
@@ -280,7 +280,7 @@ namespace oneParse {
       }
     };
     static constexpr bool chk(char c) { return ((c==CC)||...); }
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       if (!*s || !chk(*s)) return {false, {}, s, s};
       return {true, *s, s+1};
     }
@@ -298,7 +298,7 @@ namespace oneParse {
       }
     };
     static constexpr bool chk(char c) { return F(c); }
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       if (!*s || !F(*s)) return {false, {}, s, s};
       return {true, *s, s+1};
     }
@@ -315,7 +315,7 @@ namespace oneParse {
       }
     };
     static constexpr bool chk(char c) { return c!='\0'; }
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       if (!*s) return {false, {}, s, s};
       return {true, *s, s+1};
     }
@@ -339,7 +339,7 @@ namespace oneParse {
     static constexpr bool chk(char c) {
       return (PP::template Part<ParseAPI<Nil>>::chk(c)||...);
     }
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       if (!*s || !chk(*s)) return {false, {}, s, s};
       return {true, *s, s+1};
     }
@@ -361,7 +361,7 @@ namespace oneParse {
     static constexpr bool chk(char c) {
       return (PP::template Part<ParseAPI<Nil>>::chk(c)&&...);
     }
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       if (!*s || !chk(*s)) return {false, {}, s, s};
       return {true, *s, s+1};
     }
@@ -383,7 +383,7 @@ namespace oneParse {
     static constexpr bool chk(char c) {
       return !P::template Part<ParseAPI<Nil>>::chk(c);
     }
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       if (!*s || !chk(*s)) return {false, {}, s, s};
       return {true, *s, s+1};
     }
@@ -502,7 +502,7 @@ namespace oneParse {
       }
     };
     // Typed: match 1+ chars, return last
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       if (!*s || !P::chk(*s)) return {false, {}, s, s};
       char last = *s++;
       while (*s && P::chk(*s)) { last = *s++; }
@@ -523,7 +523,7 @@ namespace oneParse {
       }
     };
     // Typed: skip 0+ chars matching P (zero-width — val is '\0')
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       while (*s && P::chk(*s)) ++s;
       return {true, '\0', s};
     }
@@ -542,7 +542,7 @@ namespace oneParse {
       }
     };
     // Typed: match 0 or 1 — always succeeds; '\0' if no match
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       if (*s && P::chk(*s)) return {true, *s, s+1};
       return {true, '\0', s};
     }
@@ -557,7 +557,7 @@ namespace oneParse {
         return StreamRes::Fail();
       }
     };
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       while (*s && (unsigned char)*s<=' ') ++s;
       return {true, '\0', s};
     }
@@ -839,7 +839,7 @@ namespace oneParse {
 
   struct Eof : ZeroWidthTag {
     static constexpr bool chk(char c) { return c=='\0'; }
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       if (*s) return {false, '\0', s, s};
       return {true, '\0', s};
     }
@@ -852,7 +852,7 @@ namespace oneParse {
     using T2 = typename P2::ValType;
     using ValType = Pair<T1,T2>;
 
-    static Res<Pair<T1,T2>> run(Src s) {
+    [[nodiscard]] static Res<Pair<T1,T2>> run(Src s) {
       auto r1 = P1::run(s);
       if (!r1.ok) return Res<Pair<T1,T2>>(false, {}, s, r1.err);
       auto r2 = P2::run(r1.rest);
@@ -866,7 +866,7 @@ namespace oneParse {
   struct ManyN {
     using ValType = Arr<typename P::ValType, N>;
 
-    static Res<ValType> run(Src s) {
+    [[nodiscard]] static Res<ValType> run(Src s) {
       ValType buf{};
       while (*s) {
         auto r = P::run(s);
@@ -883,7 +883,7 @@ namespace oneParse {
   struct SomeN {
     using ValType = Arr<typename P::ValType, N>;
 
-    static Res<ValType> run(Src s) {
+    [[nodiscard]] static Res<ValType> run(Src s) {
       ValType buf{};
       while (*s) {
         auto r = P::run(s);
@@ -919,7 +919,7 @@ namespace oneParse {
   template<typename... Comps>
   struct Skip : ZeroWidthTag {
     using Exec = typename Chain<SkipStep<Comps>...>::template Part<SkipTerminal>;
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       const char* start = s;
       if (!Exec::step(s)) return {false, '\0', start, start};
       return {true, '\0', s};
@@ -929,7 +929,7 @@ namespace oneParse {
   // ManyFn<P, Fn> — call Fn(char) for each match (zero-width, side-effect)
   template<typename P, void(*Fn)(char)>
   struct ManyFn : ZeroWidthTag {
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       while (*s) {
         auto r = P::run(s);
         if (!r.ok) break;
@@ -945,7 +945,7 @@ namespace oneParse {
   struct Str : ZeroWidthTag {
     static constexpr int Len = [] { int n = 0; while (S[n]) ++n; return n; }();
 
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       if constexpr (Len < 8) {
         // char-by-char — branch predictor wins for short literals (benchmark: 2× faster at ≤7 chars)
         const char* p = S;
@@ -968,7 +968,7 @@ namespace oneParse {
     using OutT = std::invoke_result_t<decltype(Fn), InputT>;
     using ValType = OutT;
 
-    static Res<OutT> run(Src s) {
+    [[nodiscard]] static Res<OutT> run(Src s) {
       auto r = P::run(s);
       if (!r.ok) return Res<OutT>(false, OutT{}, s, r.err);
       return Res<OutT>(true, Fn(r.val), r.rest);
@@ -980,7 +980,7 @@ namespace oneParse {
   struct As {
     using ValType = T;
 
-    static Res<T> run(Src s) {
+    [[nodiscard]] static Res<T> run(Src s) {
       auto r = P::run(s);
       if (!r.ok) return Res<T>(false, T{}, s, r.err);
       return Res<T>(true, T(r.val), r.rest);
@@ -992,7 +992,7 @@ namespace oneParse {
   struct Verify {
     using ValType = typename P::ValType;
 
-    static Res<ValType> run(Src s) {
+    [[nodiscard]] static Res<ValType> run(Src s) {
       auto r = P::run(s);
       if (!r.ok) return r;
       if (!Pred(r.val)) return {false, r.val, s, s};
@@ -1005,7 +1005,7 @@ namespace oneParse {
   struct Between {
     using ValType = typename Content::ValType;
 
-    static Res<ValType> run(Src s) {
+    [[nodiscard]] static Res<ValType> run(Src s) {
       auto r1 = Open::run(s);
       if (!r1.ok) return Res<ValType>(false, ValType{}, s, r1.err);
       auto r2 = Content::run(r1.rest);
@@ -1021,7 +1021,7 @@ namespace oneParse {
   struct SepBy1 {
     using ValType = Arr<typename P::ValType, N>;
 
-    static Res<ValType> run(Src s) {
+    [[nodiscard]] static Res<ValType> run(Src s) {
       ValType arr{};
       auto r = P::run(s);
       if (!r.ok) return Res<ValType>(false, ValType{}, s, r.err);
@@ -1042,7 +1042,7 @@ namespace oneParse {
   struct SepBy {
     using ValType = Arr<typename P::ValType, N>;
 
-    static Res<ValType> run(Src s) {
+    [[nodiscard]] static Res<ValType> run(Src s) {
       ValType arr{};
       auto r = P::run(s);
       if (!r.ok) return {true, arr, s};  // zero matches: ok, empty
@@ -1060,7 +1060,7 @@ namespace oneParse {
   // ManyTill<P,End> — consume P* until End matches (peek; End not consumed)
   template<typename P, typename End>
   struct ManyTill : ZeroWidthTag {
-    static Res<char> run(Src s) {
+    [[nodiscard]] static Res<char> run(Src s) {
       while (*s) {
         if (End::run(s).ok) return {true, '\0', s};
         auto r = P::run(s); if (!r.ok) return {false, '\0', s, s};
@@ -1076,7 +1076,7 @@ namespace oneParse {
   struct TryOr {
     using ValType = typename std::tuple_element_t<0, std::tuple<PP...>>::ValType;
 
-    static Res<ValType> run(Src s) {
+    [[nodiscard]] static Res<ValType> run(Src s) {
       Res<ValType> result{};
       bool found = (([&]() -> bool {
         auto r = PP::run(s);
@@ -1166,7 +1166,7 @@ namespace oneParse {
     template<typename... XX> using App = TypedDef<T, XX..., Comps...>;
     template<typename... XX> using Ins = TypedDef<T, Comps..., XX...>;
 
-    static Res<T> run(Src s) {
+    [[nodiscard]] static Res<T> run(Src s) {
       T val{};
       Src start = s;
       Src err   = nullptr;
@@ -1178,7 +1178,7 @@ namespace oneParse {
     // zero-arg run(): available when From<Buf> is among Comps
     // Function template so enable_if SFINAE fires at call site, not class instantiation
     template<bool _En = (std::is_base_of_v<FromTag, Comps> || ...)>
-    static auto run() -> std::enable_if_t<_En, Res<T>>
+    [[nodiscard]] static auto run() -> std::enable_if_t<_En, Res<T>>
     { return run(nullptr); }
   };
 
